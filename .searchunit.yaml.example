@@ -1,0 +1,16 @@
+# Copy to .searchunit.yaml in the project directory or $HOME/.searchunit.yaml
+# Flags override these values.
+
+# Optional Chrome UX Report key (missing CrUX is not a failure).
+# Applied from $HOME/.searchunit.yaml, flags, or CRUX_API_KEY — not from a project cwd file.
+crux_api_key: ""
+
+# Default --format when the flag is omitted.
+# table | json apply to every command. html | markdown are audit --format only;
+# other commands fall back to table if this is set to html or markdown.
+output: table
+
+# Response body cap. Integer bytes, or kb/mb (1024-based). Default 2mb. Range 1kb–32mb.
+# A body over the cap is an error. The CLI does not return truncated bytes.
+# cwd .searchunit.yaml overlays $HOME for this key. Flags override YAML.
+max_body_bytes: 2mb

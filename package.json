@@ -1,0 +1,66 @@
+{
+  "name": "@searchunit/cli",
+  "version": "0.1.0",
+  "description": "Local CLI for deterministic SEO/GEO readiness audits",
+  "keywords": [
+    "audit",
+    "cli",
+    "geo",
+    "searchunit",
+    "seo"
+  ],
+  "homepage": "https://searchunit.io/",
+  "bugs": {
+    "url": "https://github.com/diegoos/searchunit-cli/issues"
+  },
+  "license": "MIT",
+  "author": "Diego Oliveira",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/diegoos/searchunit-cli.git"
+  },
+  "bin": {
+    "searchunit": "dist/cli.js"
+  },
+  "files": [
+    "dist"
+  ],
+  "type": "module",
+  "publishConfig": {
+    "access": "public"
+  },
+  "scripts": {
+    "searchunit": "bun run src/index.ts",
+    "start": "bun run src/index.ts",
+    "build": "bun build src/index.ts --outfile dist/cli.js --target node --format esm --packages external --banner='#!/usr/bin/env node' && chmod +x dist/cli.js",
+    "prepack": "bun run build",
+    "test": "bun test",
+    "lint": "oxlint ./src ./tests",
+    "lint:fix": "oxlint --fix ./src ./tests",
+    "fmt": "bun scripts/apply-vertical-spacing.ts && oxfmt",
+    "fmt:check": "bun scripts/apply-vertical-spacing.ts --check && oxfmt --check",
+    "check": "tsc --noEmit",
+    "prepare": "husky"
+  },
+  "dependencies": {
+    "chalk": "^6.0.0",
+    "cheerio": "^1.2.0",
+    "cli-table3": "^0.6.5",
+    "ipaddr.js": "^2.5.0",
+    "ora": "^9.4.1",
+    "tldts": "^7.4.13",
+    "undici": "8.10.2",
+    "yaml": "^2.9.1"
+  },
+  "devDependencies": {
+    "@types/bun": "^1.4.2",
+    "@types/node": "^22.20.3",
+    "husky": "^9.1.7",
+    "oxfmt": "^0.68.0",
+    "oxlint": "^1.83.0",
+    "typescript": "^7.0.2"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}

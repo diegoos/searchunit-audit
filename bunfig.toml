@@ -1,0 +1,2 @@
+# Bun test config. No global preload; tests use cheerio fixtures in-process.
+[test]
