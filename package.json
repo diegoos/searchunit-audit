@@ -1,6 +1,6 @@
 {
   "name": "@searchunit/cli",
-  "version": "0.1.0",
+  "version": "0.0.1-beta.1",
   "description": "Local CLI for deterministic SEO/GEO readiness audits",
   "keywords": [
     "audit",
