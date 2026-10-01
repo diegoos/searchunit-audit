@@ -1,6 +1,6 @@
 # SearchUnit CLI
 
-Local CLI for one public URL. It fetches static HTTP and prints a deterministic SEO/GEO audit, or a narrower check. Runtime is Node.js 20 or newer.
+Local CLI for one public URL, or a dev server on localhost. It fetches static HTTP and prints a deterministic SEO/GEO audit, or a narrower check. Runtime is Node.js 20 or newer.
 
 ```bash
 npm install -g @searchunit/cli
@@ -19,7 +19,9 @@ You pass a command and a target. The CLI parses flags, loads `.searchunit.yaml` 
 
 Each run covers a single URL. The HTML is parsed as static markup. The CLI does not execute page JavaScript. Progress goes to stderr. The report goes to stdout.
 
-Network (http/https on ports 80 and 443 only):
+A local target is `localhost`, `*.localhost`, `127.0.0.1`, or `::1`, on any port. `searchunit audit localhost:3000` uses `http://`. Later fetches (redirects, robots, sitemap, llms.txt) may use that same port on loopback. Other private, link-local, and metadata hosts stay refused. A public URL that redirects to loopback is refused. CrUX is not called for a loopback URL.
+
+Network for a public URL (http/https on ports 80 and 443 only):
 
 - The page you pass
 - `/robots.txt`
@@ -60,6 +62,7 @@ Without a key, CrUX is skipped. Technical foundations is scored from the other s
 
 ```bash
 searchunit audit https://example.com
+searchunit audit http://localhost:3000
 searchunit audit https://example.com --format=json
 searchunit audit https://example.com --agent
 searchunit audit https://example.com -o ./reports/audit.md

@@ -2,6 +2,7 @@ import type { CliFlags } from './lib/args.ts';
 import { CANONICAL_COMMANDS, type CanonicalCommand } from './lib/args.ts';
 import { formatConfigHelp, formatHelp, VERSION } from './lib/help.ts';
 import { CliError } from './lib/errors.ts';
+import { withLocalTarget } from './lib/fetch.ts';
 import { runAudit } from './commands/audit.ts';
 import { runConfig } from './commands/config.ts';
 import { runSchemaCheck } from './commands/schema-check.ts';
@@ -56,5 +57,5 @@ export async function dispatch(
     );
   }
 
-  return handler(target, flags);
+  return withLocalTarget(target, () => handler(target, flags));
 }

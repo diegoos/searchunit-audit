@@ -9,6 +9,7 @@ import {
   formatFetchError,
   readCappedBody,
   resolvePublicHop,
+  withLocalTarget,
 } from '../src/lib/fetch.ts';
 
 import { pinLookup } from '../src/lib/pinnedFetch.ts';
@@ -29,7 +30,7 @@ describe('allResolvedAddressesArePublic', () => {
 });
 
 describe('resolvePublicHop', () => {
-  test('rejects localhost', async () => {
+  test('rejects localhost unless it is the command target', async () => {
     expect(await resolvePublicHop(new URL('http://localhost/'))).toEqual({
       ok: false,
       error: 'blocked',
@@ -37,6 +38,42 @@ describe('resolvePublicHop', () => {
     expect(await resolvePublicHop(new URL('http://127.0.0.1/'))).toEqual({
       ok: false,
       error: 'blocked',
+    });
+    expect(await resolvePublicHop(new URL('http://127.0.0.1:3000/'))).toEqual({
+      ok: false,
+      error: 'blocked',
+    });
+  });
+  test('allows the local dev target on its port and blocks other hosts', async () => {
+    await withLocalTarget('http://127.0.0.1:5173', async () => {
+      expect(await resolvePublicHop(new URL('http://127.0.0.1:5173/'))).toEqual({
+        ok: true,
+        pinnedAddress: '127.0.0.1',
+      });
+      expect(await resolvePublicHop(new URL('http://[::1]:5173/'))).toEqual({
+        ok: true,
+        pinnedAddress: '::1',
+      });
+      const localhost = await resolvePublicHop(new URL('http://localhost:5173/'));
+
+      expect(localhost.ok).toBe(true);
+
+      if (localhost.ok) {
+        expect(['127.0.0.1', '::1']).toContain(localhost.pinnedAddress);
+      }
+
+      expect(await resolvePublicHop(new URL('http://127.0.0.1:8080/'))).toEqual({
+        ok: false,
+        error: 'blocked',
+      });
+      expect(await resolvePublicHop(new URL('http://10.0.0.1:5173/'))).toEqual({
+        ok: false,
+        error: 'blocked',
+      });
+      expect(await resolvePublicHop(new URL('https://example.com:8443/'))).toEqual({
+        ok: false,
+        error: 'blocked',
+      });
     });
   });
   test('rejects metadata hostnames', async () => {

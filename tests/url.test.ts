@@ -5,6 +5,11 @@ describe('normalizeUrl', () => {
   test('prepends https when the scheme is missing', () => {
     expect(normalizeUrl('example.com')).toBe('https://example.com');
   });
+  test('prepends http for a loopback host without a scheme', () => {
+    expect(normalizeUrl('localhost:3000')).toBe('http://localhost:3000');
+    expect(normalizeUrl('127.0.0.1:5173/docs')).toBe('http://127.0.0.1:5173/docs');
+    expect(normalizeUrl('[::1]:8080')).toBe('http://[::1]:8080');
+  });
   test('keeps an existing scheme', () => {
     expect(normalizeUrl('http://example.com/path')).toBe('http://example.com/path');
   });

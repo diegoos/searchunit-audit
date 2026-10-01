@@ -1,9 +1,15 @@
 import { lookup } from 'node:dns/promises';
 import type { LookupAddress } from 'node:dns';
+import { AsyncLocalStorage } from 'node:async_hooks';
 import { isIP } from 'node:net';
 import { gunzipSync } from 'node:zlib';
 import pkg from '../../package.json' with { type: 'json' };
-import { isBlockedHostname, isBlockedIpString } from '../ip-policy.ts';
+import {
+  isBlockedHostname,
+  isBlockedIpString,
+  isLoopbackHostname,
+  isLoopbackIpString,
+} from '../ip-policy.ts';
 import { DEFAULT_MAX_BODY_BYTES, parseMaxBodyBytes } from './maxBodyBytes.ts';
 import { pinnedFetch } from './pinnedFetch.ts';
 import { normalizeUrl, stripUserinfo } from './url.ts';
@@ -78,6 +84,44 @@ export const DISCOVERY_PAGE_TIMEOUT_MS = PAGE_TIMEOUT_MS;
 const MAX_REDIRECTS = 5;
 const ALLOWED_PORTS = new Set(['', '80', '443']);
 
+/** Port of the command target when that target is loopback. Null keeps loopback blocked. */
+const localTargetScope = new AsyncLocalStorage<string | null>();
+
+function numericPort(url: URL): string {
+  if (url.port) {
+    return url.port;
+  }
+
+  return url.protocol === 'https:' ? '443' : '80';
+}
+
+function loopbackPort(target: string | undefined): string | null {
+  if (!target?.trim()) {
+    return null;
+  }
+
+  try {
+    const url = stripUserinfo(new URL(normalizeUrl(target)));
+    const hostname = url.hostname.replace(/^\[|\]$/g, '');
+
+    if (!isLoopbackHostname(hostname) && !isLoopbackIpString(hostname)) {
+      return null;
+    }
+
+    return numericPort(url);
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Runs `fn` with loopback fetches allowed on the same port as `target`.
+ * A public target, or no target, leaves loopback blocked.
+ */
+export function withLocalTarget<T>(target: string | undefined, fn: () => Promise<T>): Promise<T> {
+  return localTargetScope.run(loopbackPort(target), fn);
+}
+
 export const REDIRECT_STATUSES = new Set([301, 302, 303, 307, 308]);
 const USER_AGENT = `SearchUnitCLI/${pkg.version}`;
 
@@ -139,12 +183,67 @@ async function lookupAll(hostname: string, signal?: AbortSignal): Promise<Lookup
 }
 
 /**
+ * Loopback hop for a local dev target. Null means the public SSRF checks decide.
+ * A loopback name that does not resolve to loopback is blocked.
+ */
+async function resolveLoopbackHop(url: URL, signal?: AbortSignal): Promise<HopResolve | null> {
+  const allowedPort = localTargetScope.getStore();
+
+  if (!allowedPort || numericPort(url) !== allowedPort) {
+    return null;
+  }
+
+  const hostname = url.hostname.replace(/^\[|\]$/g, '');
+
+  if (isIP(hostname)) {
+    if (!isLoopbackIpString(hostname)) {
+      return null;
+    }
+
+    return { ok: true, pinnedAddress: hostname };
+  }
+
+  if (!isLoopbackHostname(hostname)) {
+    return null;
+  }
+
+  try {
+    const records = await lookupAll(hostname, signal);
+
+    if (records.length === 0 || records.some((record) => !isLoopbackIpString(record.address))) {
+      return { ok: false, error: 'blocked' };
+    }
+
+    const first = records[0];
+
+    if (!first) {
+      return { ok: false, error: 'network' };
+    }
+
+    return { ok: true, pinnedAddress: first.address };
+  } catch (err) {
+    if (err instanceof Error && err.name === 'AbortError') {
+      throw err;
+    }
+
+    return { ok: false, error: 'network' };
+  }
+}
+
+/**
  * SSRF preflight: scheme, port, hostname, and DNS. Returns the address to pin
  * on the TCP connection, or blocked/network when the hop must not be fetched.
+ * Loopback is allowed only inside `withLocalTarget`, and only on that port.
  */
 export async function resolvePublicHop(url: URL, signal?: AbortSignal): Promise<HopResolve> {
   if (!['http:', 'https:'].includes(url.protocol)) {
     return { ok: false, error: 'blocked' };
+  }
+
+  const loopback = await resolveLoopbackHop(url, signal);
+
+  if (loopback) {
+    return loopback;
   }
 
   if (!ALLOWED_PORTS.has(url.port)) {

@@ -1,4 +1,17 @@
+import { isLoopbackHostname, isLoopbackIpString } from '../ip-policy.ts';
+
 const DEFAULT_SCHEME = 'https://';
+
+function isLoopbackInput(input: string): boolean {
+  try {
+    const url = new URL(`http://${input}`);
+    const hostname = url.hostname.replace(/^\[|\]$/g, '');
+
+    return isLoopbackHostname(hostname) || isLoopbackIpString(hostname);
+  } catch {
+    return false;
+  }
+}
 
 /**
  * Prepends https:// when the user omits a scheme.
@@ -12,6 +25,10 @@ export function normalizeUrl(input: string): string {
 
   if (/^https?:\/\//i.test(trimmed)) {
     return trimmed;
+  }
+
+  if (isLoopbackInput(trimmed)) {
+    return `http://${trimmed}`;
   }
 
   return `${DEFAULT_SCHEME}${trimmed}`;

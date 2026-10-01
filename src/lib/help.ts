@@ -85,6 +85,7 @@ const NOTES: readonly Entry[] = [
 
 const EXAMPLES = [
   'searchunit audit https://example.com',
+  'searchunit audit http://localhost:3000',
   'searchunit audit https://example.com --format=json',
   'searchunit audit https://example.com --agent',
   'searchunit audit https://example.com -o ./reports/audit.md',
@@ -221,7 +222,7 @@ export function formatHelp(): string {
 
   return helpDocument(
     'SearchUnit CLI',
-    'Local SEO/GEO audit for one public URL.',
+    'Local SEO/GEO audit for one public URL, or a dev server on localhost.',
     `  ${theme.dim('searchunit')} ${theme.command('<command>')} ${theme.dim('[target]')} ${theme.option('[options]')}`,
     [
       { heading: 'Commands', body: alignEntries(commands, theme.command) },

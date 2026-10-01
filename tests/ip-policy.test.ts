@@ -1,5 +1,10 @@
 import { describe, expect, test } from 'bun:test';
-import { isBlockedHostname, isBlockedIpString } from '../src/ip-policy.ts';
+import {
+  isBlockedHostname,
+  isBlockedIpString,
+  isLoopbackHostname,
+  isLoopbackIpString,
+} from '../src/ip-policy.ts';
 
 describe('isBlockedHostname', () => {
   test('blocks localhost, .local, and .internal', () => {
@@ -16,6 +21,26 @@ describe('isBlockedHostname', () => {
   });
   test('allows a public hostname', () => {
     expect(isBlockedHostname('example.com')).toBe(false);
+  });
+});
+
+describe('loopback names and addresses', () => {
+  test('treats localhost and *.localhost as loopback names', () => {
+    expect(isLoopbackHostname('localhost')).toBe(true);
+    expect(isLoopbackHostname('LocalHost.')).toBe(true);
+    expect(isLoopbackHostname('app.localhost')).toBe(true);
+    expect(isLoopbackHostname('printer.local')).toBe(false);
+    expect(isLoopbackHostname('example.com')).toBe(false);
+  });
+  test('treats 127.0.0.0/8 and ::1 as loopback addresses', () => {
+    expect(isLoopbackIpString('127.0.0.1')).toBe(true);
+    expect(isLoopbackIpString('127.1.2.3')).toBe(true);
+    expect(isLoopbackIpString('::1')).toBe(true);
+    expect(isLoopbackIpString('[::1]')).toBe(true);
+    expect(isLoopbackIpString('::ffff:127.0.0.1')).toBe(true);
+    expect(isLoopbackIpString('10.0.0.1')).toBe(false);
+    expect(isLoopbackIpString('8.8.8.8')).toBe(false);
+    expect(isLoopbackIpString('not-an-ip')).toBe(false);
   });
 });
 

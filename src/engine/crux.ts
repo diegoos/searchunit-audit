@@ -5,6 +5,7 @@ import {
   readCappedBody,
   resolvePublicHop,
 } from '../lib/fetch.ts';
+import { isLoopbackHostname, isLoopbackIpString } from '../ip-policy.ts';
 import { pinnedFetch } from '../lib/pinnedFetch.ts';
 
 const CRUX_ENDPOINT = 'https://chromeuxreport.googleapis.com/v1/records:queryRecord';
@@ -30,6 +31,16 @@ const CORE_VITALS = new Set([
 ]);
 
 const FRACTION_METRICS = new Set(['form_factors', 'navigation_types']);
+
+function isLoopbackUrl(raw: string): boolean {
+  try {
+    const hostname = new URL(raw).hostname.replace(/^\[|\]$/g, '');
+
+    return isLoopbackHostname(hostname) || isLoopbackIpString(hostname);
+  } catch {
+    return false;
+  }
+}
 
 function rateMetric(metricName: string, p75: unknown): string {
   const thresholds = METRIC_THRESHOLDS[metricName];
@@ -165,7 +176,7 @@ async function queryCrux(
  * Queries CrUX when `CRUX_API_KEY` is set. Missing data is skipped, not a failure.
  */
 export async function fetchCruxResults(urls: string[]): Promise<CruxFetchResult> {
-  const deduped = [...new Set(urls.filter(Boolean))];
+  const deduped = [...new Set(urls.filter((url) => Boolean(url) && !isLoopbackUrl(url)))];
   const apiKey = process.env.CRUX_API_KEY?.trim();
 
   if (!apiKey) {

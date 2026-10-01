@@ -1,6 +1,6 @@
 # SearchUnit CLI
 
-Local CLI: one public URL, static HTTP, deterministic SEO/GEO audit plus narrower tool checks.
+Local CLI: one public URL or a loopback dev server, static HTTP, deterministic SEO/GEO audit plus narrower tool checks.
 
 ## Runtime
 
@@ -14,7 +14,7 @@ SSRF host/IP checks: import `src/ip-policy.ts`. Keep `ipaddr.js` as the range pa
 
 ## Fetch and scores
 
-Page, robots, sitemap, and llms.txt go through `fetchPublicUrl` → `pinnedFetch` (SSRF preflight and DNS pin on every hop). Body cap defaults to 2 MiB (`max_body_bytes` / `--max-bytes`, 1 KiB–32 MiB). A body over the cap is a fetch error (`too_large`); do not return a truncated body. HTML larger than 2 MiB (`DEFAULT_MAX_BODY_BYTES`) is the `oversized_html` blocker. That only happens when the cap is raised above 2 MiB. `robots.txt` and `llms.txt` are scored signals, not fetch gates. Sitemap URL: robots `Sitemap:` lines, then HTML `parsed.sitemapUrls`, else origin `/sitemap.xml`. Optional CrUX POSTs through `resolvePublicHop` + `pinnedFetch` (`src/engine/crux.ts`); a missing key is skip. Audit, kind, and tool check payloads include `cruxApiKeyAvailable` (true when `CRUX_API_KEY` is set). With a key, technical foundations includes CrUX field data and can change between runs. Without a key, that component omits Core Web Vitals. Unidentified page kind and site type are `Undefined`.
+Page, robots, sitemap, and llms.txt go through `fetchPublicUrl` → `pinnedFetch` (SSRF preflight and DNS pin on every hop). `dispatch` wraps the command in `withLocalTarget`: loopback (`localhost`, `*.localhost`, `127.0.0.0/8`, `::1`) is allowed only on the command target's port. Other private hosts stay refused. A loopback URL omits CrUX. A scheme-less loopback target uses `http://`. Body cap defaults to 2 MiB (`max_body_bytes` / `--max-bytes`, 1 KiB–32 MiB). A body over the cap is a fetch error (`too_large`); do not return a truncated body. HTML larger than 2 MiB (`DEFAULT_MAX_BODY_BYTES`) is the `oversized_html` blocker. That only happens when the cap is raised above 2 MiB. `robots.txt` and `llms.txt` are scored signals, not fetch gates. Sitemap URL: robots `Sitemap:` lines, then HTML `parsed.sitemapUrls`, else origin `/sitemap.xml`. Optional CrUX POSTs through `resolvePublicHop` + `pinnedFetch` (`src/engine/crux.ts`); a missing key is skip. Audit, kind, and tool check payloads include `cruxApiKeyAvailable` (true when `CRUX_API_KEY` is set). With a key, technical foundations includes CrUX field data and can change between runs. Without a key, that component omits Core Web Vitals. Unidentified page kind and site type are `Undefined`.
 
 GEO scores live only in `src/engine/scoring.ts`. Findings reuse `src/tools/<domain>` analyzers. Commands and render print scores; they do not compute them. Keep engine crawler/schema tables and tool catalogs as separate lists. Human audit reports list kind scores overview, geo, and seo. The Crawlers block is only on the `audit` report (table, html, and markdown). `geo-check` shows crawlers as findings, not a second table.
 
