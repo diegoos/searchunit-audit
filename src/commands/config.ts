@@ -34,10 +34,17 @@ interface ConfigLayer {
   default: string | undefined;
 }
 
+const SECRET_YAML_NAMES = [
+  'crux_api_key',
+  'CRUX_API_KEY',
+  'gsc_access_token',
+  'GSC_ACCESS_TOKEN',
+] as const;
+
 function redactMappingForJson(record: Record<string, unknown>): Record<string, unknown> {
   const next = { ...record };
 
-  for (const name of ['crux_api_key', 'CRUX_API_KEY']) {
+  for (const name of SECRET_YAML_NAMES) {
     const value = next[name];
 
     if (typeof value === 'string' && value.trim()) {
@@ -49,7 +56,7 @@ function redactMappingForJson(record: Record<string, unknown>): Record<string, u
 }
 
 function redactSecret(key: ConfigKey, value: string): string {
-  return key === 'crux_api_key' && value.trim() ? REDACTED : value;
+  return (key === 'crux_api_key' || key === 'gsc_access_token') && value.trim() ? REDACTED : value;
 }
 
 function displayLayerForTable(key: ConfigKey, value: string | undefined): string {
@@ -69,7 +76,7 @@ function redactLayerJson(
   key: ConfigKey,
   layer: ReturnType<typeof jsonLayers>,
 ): ReturnType<typeof jsonLayers> {
-  if (key !== 'crux_api_key') {
+  if (!isHomeOnlyConfigKey(key)) {
     return layer;
   }
 
@@ -81,7 +88,7 @@ function redactLayerJson(
 }
 
 /**
- * Gets, sets, or unsets keys in `.searchunit.yaml`.
+ * Gets, sets, or removes keys in `.searchunit.yaml`.
  * `-g/--global` selects `$HOME`; otherwise the current directory.
  */
 export async function runConfig(
@@ -92,10 +99,6 @@ export async function runConfig(
   const path = configFilePath({ global: flags.global, cwd: dirs.cwd, home: dirs.home });
 
   if (target === 'list') {
-    if (flags.unset) {
-      throw new CliError('list cannot be used with --unset. Example: searchunit config list', 2);
-    }
-
     if (flags.rest.length > 0) {
       throw new CliError('Too many arguments. Example: searchunit config list', 2);
     }
@@ -103,20 +106,16 @@ export async function runConfig(
     return listFile(path, flags);
   }
 
-  if (flags.unset) {
-    if (flags.rest.length > 0) {
-      throw new CliError('Too many arguments. Example: searchunit config --unset output', 2);
-    }
-
-    return unsetKey(path, target, flags, dirs);
+  if (target === 'set') {
+    return runSet(path, flags, dirs);
   }
 
-  if (flags.rest.length > 1) {
-    throw new CliError('Too many arguments. Example: searchunit config output json', 2);
+  if (target === 'remove') {
+    return runRemove(path, flags, dirs);
   }
 
-  if (target && flags.rest[0] !== undefined) {
-    return setKey(path, target, flags.rest[0], flags, dirs);
+  if (flags.rest.length > 0) {
+    throw new CliError('Too many arguments. Example: searchunit config set output json', 2);
   }
 
   if (target) {
@@ -126,9 +125,38 @@ export async function runConfig(
   return listKeys(path, flags, dirs);
 }
 
+/** Writes one key from `config set <key> <value>`. */
+function runSet(path: string, flags: CliFlags, dirs: ConfigDirs): number {
+  if (flags.rest.length > 2) {
+    throw new CliError('Too many arguments. Example: searchunit config set output json', 2);
+  }
+
+  const [raw, value] = flags.rest;
+
+  if (raw === undefined) {
+    throw new CliError('A config key is required. Example: searchunit config set output json', 2);
+  }
+
+  if (value === undefined) {
+    throw new CliError('A value is required. Example: searchunit config set output json', 2);
+  }
+
+  return setKey(path, raw, value, flags, dirs);
+}
+
+/** Deletes one key from `config remove <key>`. */
+function runRemove(path: string, flags: CliFlags, dirs: ConfigDirs): number {
+  if (flags.rest.length > 1) {
+    throw new CliError('Too many arguments. Example: searchunit config remove output', 2);
+  }
+
+  return removeKey(path, flags.rest[0], flags, dirs);
+}
+
+/** Resolves a config key name, or rejects a missing or unknown one. */
 function requireKey(raw: string | undefined): ConfigKey {
   if (!raw) {
-    throw new CliError('A config key is required. Example: searchunit config output json', 2);
+    throw new CliError('A config key is required. Example: searchunit config set output json', 2);
   }
 
   const key = canonicalConfigKey(raw);
@@ -258,7 +286,8 @@ function setKey(
   return 0;
 }
 
-function unsetKey(
+/** Deletes one key from the selected YAML file. */
+function removeKey(
   path: string,
   raw: string | undefined,
   flags: CliFlags,
@@ -278,12 +307,12 @@ function unsetKey(
 
   printConfigView(flags, {
     files: configFileLines(dirs),
-    subtitle: `unset ${key}`,
+    subtitle: `remove ${key}`,
     json: {
       ok: true,
       command: 'config',
       path,
-      action: 'unset',
+      action: 'remove',
       key,
       ...redactLayerJson(key, jsonLayers(layer)),
     },

@@ -12,7 +12,6 @@ function flags(over: Partial<CliFlags> = {}): CliFlags {
     version: false,
     silent: true,
     global: false,
-    unset: false,
     agent: true,
     outFormat: 'table',
     outputPath: undefined,

@@ -399,7 +399,6 @@ describe('withProgress', () => {
       version: false,
       silent: true,
       global: false,
-      unset: false,
       agent: false,
       outFormat: 'table',
       outputPath: undefined,

@@ -20,7 +20,6 @@ function flags(over: Partial<CliFlags> = {}): CliFlags {
     failOn: undefined,
     rest: [],
     global: false,
-    unset: false,
     agent: false,
     outputPath: undefined,
     maxBytes: DEFAULT_MAX_BODY_BYTES,

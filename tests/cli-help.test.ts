@@ -53,8 +53,9 @@ describe('CLI help and version', () => {
     expect(help).toContain('searchunit config');
     expect(help).toContain('Operations');
     expect(help).toContain('list -g');
-    expect(help).toContain('<key> <value>');
-    expect(help).toContain('--unset <key>');
+    expect(help).toContain('set <key> <value>');
+    expect(help).toContain('remove <key>');
+    expect(help).not.toContain('--unset');
     expect(help).toContain('crux_api_key');
     expect(help).toContain('max_body_bytes');
     expect(help).toContain('merge');
@@ -76,7 +77,9 @@ describe('CLI help and version', () => {
 
       expect(code).toBe(0);
       expect(text).toContain('Operations');
-      expect(text).toContain('--unset');
+      expect(text).toContain('set <key> <value>');
+      expect(text).toContain('remove <key>');
+      expect(text).not.toContain('--unset');
       expect(text).not.toContain('schema-check');
     } finally {
       console.log = original;

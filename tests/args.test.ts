@@ -15,6 +15,7 @@ describe('resolveCommand', () => {
     expect(resolveCommand('ai-visibility-check')).toBe('geo-check');
     expect(resolveCommand('ai-visibility')).toBe('geo-check');
     expect(resolveCommand('google-profile-finder')).toBe('google-profile');
+    expect(resolveCommand('search-console')).toBe('gsc');
   });
   test('leaves canonical names unchanged', () => {
     expect(resolveCommand('audit')).toBe('audit');
@@ -72,23 +73,31 @@ describe('parseCli', () => {
     const parsed = parseCli(['audit', 'https://example.com', '--json'], { outFormat: 'html' });
     expect(parsed.flags.outFormat).toBe('json');
   });
-  test('parses -g, --global, and --unset', () => {
-    const globalShort = parseCli(['config', '-g', 'output']);
+  test('parses config set, remove, list, and bare config', () => {
+    const set = parseCli(['config', 'set', '-g', 'crux_api_key', 'YOUR_KEY']);
 
-    expect(globalShort.command).toBe('config');
-    expect(globalShort.flags.global).toBe(true);
-    expect(globalShort.target).toBe('output');
+    expect(set.command).toBe('config');
+    expect(set.target).toBe('set');
+    expect(set.flags.global).toBe(true);
+    expect(set.flags.rest).toEqual(['crux_api_key', 'YOUR_KEY']);
 
-    const globalLong = parseCli(['--global', 'config', 'output', 'json']);
+    const remove = parseCli(['config', 'remove', '-g', 'crux_api_key']);
 
-    expect(globalLong.flags.global).toBe(true);
-    expect(globalLong.target).toBe('output');
-    expect(globalLong.flags.rest).toEqual(['json']);
+    expect(remove.target).toBe('remove');
+    expect(remove.flags.global).toBe(true);
+    expect(remove.flags.rest).toEqual(['crux_api_key']);
 
-    const unset = parseCli(['config', '--unset', 'output']);
+    const list = parseCli(['config', 'list', '--global']);
 
-    expect(unset.flags.unset).toBe(true);
-    expect(unset.target).toBe('output');
+    expect(list.target).toBe('list');
+    expect(list.flags.global).toBe(true);
+    expect(list.flags.rest).toEqual([]);
+
+    const bare = parseCli(['config']);
+
+    expect(bare.target).toBeUndefined();
+    expect(bare.flags.rest).toEqual([]);
+    expect(() => parseCli(['config', '--unset', 'output'])).toThrow('Unknown option');
   });
   test('does not apply config output default to the config command', () => {
     const parsed = parseCli(['config'], { outFormat: 'json' });
@@ -146,6 +155,21 @@ describe('parseCli', () => {
     expect(parseCli(['audit', 'https://example.com', '--max-bytes=8kb']).flags.maxBytes).toBe(8192);
     expect(() => parseCli(['audit', 'https://example.com', '--max-bytes', '10'])).toThrow(
       'max_body_bytes',
+    );
+  });
+  test('parses gsc dates and rejects a bad range', () => {
+    expect(
+      parseCli(['gsc', 'https://example.com', '--init-date=2026-01-01', '--end-date', '2026-01-31'])
+        .flags,
+    ).toMatchObject({ initDate: '2026-01-01', endDate: '2026-01-31' });
+    expect(() => parseCli(['gsc', 'https://example.com', '--init-date=2026-02-31'])).toThrow(
+      'YYYY-MM-DD',
+    );
+    expect(() =>
+      parseCli(['gsc', 'https://example.com', '--init-date=2026-02-01', '--end-date=2026-01-01']),
+    ).toThrow('on or before');
+    expect(() => parseCli(['audit', 'https://example.com', '--init-date=2026-01-01'])).toThrow(
+      'only valid with gsc',
     );
   });
 });

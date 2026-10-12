@@ -13,6 +13,7 @@ import { runSecurityHeaders } from './commands/security-headers.ts';
 import { runGeoCheck } from './commands/geo-check.ts';
 import { runSeoCheck } from './commands/seo-check.ts';
 import { runGoogleProfile } from './commands/google-profile.ts';
+import { runGsc } from './commands/gsc.ts';
 
 type CommandHandler = (target: string | undefined, flags: CliFlags) => Promise<number>;
 
@@ -27,6 +28,7 @@ const HANDLERS: Record<CanonicalCommand, CommandHandler> = {
   'geo-check': runGeoCheck,
   'seo-check': runSeoCheck,
   'google-profile': runGoogleProfile,
+  gsc: runGsc,
 };
 
 /**

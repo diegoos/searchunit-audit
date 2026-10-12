@@ -8,7 +8,6 @@ export interface CliFlags {
   version: boolean;
   silent: boolean;
   global: boolean;
-  unset: boolean;
   /** Stdout is plain markdown of the command payload. */
   agent: boolean;
   outFormat: OutputFormat;
@@ -17,6 +16,10 @@ export interface CliFlags {
   failOn: 'fail' | 'warn' | undefined;
   /** Response body cap in bytes. Default 2 MiB. */
   maxBytes: number;
+  /** `gsc` query start, `YYYY-MM-DD`. */
+  initDate?: string;
+  /** `gsc` query end, `YYYY-MM-DD`. */
+  endDate?: string;
   rest: string[];
 }
 
@@ -45,6 +48,7 @@ const COMMAND_ALIASES: Record<string, string> = {
   'ai-visibility': 'geo-check',
   'ai-visibility-check': 'geo-check',
   'google-profile-finder': 'google-profile',
+  'search-console': 'gsc',
 };
 
 export const REPORT_COMMANDS = ['audit', 'geo-check', 'seo-check'] as const;
@@ -60,6 +64,7 @@ export const CANONICAL_COMMANDS = [
   'geo-check',
   'seo-check',
   'google-profile',
+  'gsc',
 ] as const;
 
 export type CanonicalCommand = (typeof CANONICAL_COMMANDS)[number];
@@ -159,7 +164,6 @@ export function parseCli(argv: string[], defaults?: ParseCliDefaults): ParsedCli
     version: false,
     silent: false,
     global: false,
-    unset: false,
     agent: false,
     outFormat: 'table',
     outputPath: undefined,
@@ -209,11 +213,6 @@ export function parseCli(argv: string[], defaults?: ParseCliDefaults): ParsedCli
       continue;
     }
 
-    if (arg === '--unset') {
-      flags.unset = true;
-      continue;
-    }
-
     if (arg === '--color' || arg === '--no-color' || arg.startsWith('--color=')) {
       applyColorFlag(arg);
       continue;
@@ -255,6 +254,22 @@ export function parseCli(argv: string[], defaults?: ParseCliDefaults): ParsedCli
       continue;
     }
 
+    const initDate = takeNamed(argv, i, '--init-date');
+
+    if (initDate) {
+      flags.initDate = parseGscDate(initDate.value, '--init-date');
+      i = initDate.next;
+      continue;
+    }
+
+    const endDate = takeNamed(argv, i, '--end-date');
+
+    if (endDate) {
+      flags.endDate = parseGscDate(endDate.value, '--end-date');
+      i = endDate.next;
+      continue;
+    }
+
     if (arg.startsWith('-')) {
       throw new Error(`Unknown option: ${arg}`);
     }
@@ -274,6 +289,7 @@ export function parseCli(argv: string[], defaults?: ParseCliDefaults): ParsedCli
 
   applyStdoutFormat(command, flags, formatRaw, defaults);
   applyOutputPath(command, flags);
+  applyGscDates(command, flags);
   flags.maxBytes = maxBytesRaw
     ? parseMaxBodyBytes(maxBytesRaw)
     : (defaults?.maxBytes ?? flags.maxBytes);
@@ -313,6 +329,46 @@ function applyStdoutFormat(
 
 function isReportCommand(command: string): boolean {
   return (REPORT_COMMANDS as readonly string[]).includes(command);
+}
+
+/** Rejects a Search Console date range on any other command, and a start after the end. */
+function applyGscDates(command: string | undefined, flags: CliFlags): void {
+  if (!flags.initDate && !flags.endDate) {
+    return;
+  }
+
+  if (command !== 'gsc') {
+    throw new Error('--init-date and --end-date are only valid with gsc');
+  }
+
+  if (flags.initDate && flags.endDate && flags.initDate > flags.endDate) {
+    throw new Error('--init-date must be on or before --end-date');
+  }
+}
+
+/** `YYYY-MM-DD` that is a real calendar day. */
+export function parseGscDate(raw: string, flag: string): string {
+  const value = raw.trim();
+  const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(value);
+
+  if (!match) {
+    throw new Error(`${flag} must be YYYY-MM-DD`);
+  }
+
+  const year = Number(match[1]);
+  const month = Number(match[2]);
+  const day = Number(match[3]);
+  const date = new Date(Date.UTC(year, month - 1, day));
+
+  if (
+    date.getUTCFullYear() !== year ||
+    date.getUTCMonth() !== month - 1 ||
+    date.getUTCDate() !== day
+  ) {
+    throw new Error(`${flag} must be YYYY-MM-DD`);
+  }
+
+  return value;
 }
 
 /** Rejects `-o` on `config` and requires a `.json` or `.md` path. */

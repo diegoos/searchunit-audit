@@ -9,7 +9,7 @@ type Entry = readonly [label: string, detail: string];
 
 const COMMAND_HELP: Record<CanonicalCommand, string> = {
   audit: 'Overall scores, seo-check, geo-check, tool findings, and the Google Profile URL',
-  config: 'Get, set, or unset keys in .searchunit.yaml',
+  config: 'Get, set, or remove keys in .searchunit.yaml',
   'schema-check': 'JSON-LD on the page. Alias: schema-markup-check',
   'robots-check': 'robots.txt and AI crawler access. Alias: robots-txt-validator',
   'meta-check': 'Title, description, canonical, Open Graph. Alias: meta-tags-test',
@@ -18,6 +18,7 @@ const COMMAND_HELP: Record<CanonicalCommand, string> = {
   'geo-check': 'GEO score and GEO findings. Alias: ai-visibility, ai-visibility-check',
   'seo-check': 'SEO score and deterministic SEO findings',
   'google-profile': 'Google profile URL for the domain you pass. Alias: google-profile-finder',
+  gsc: 'Read-only Search Console. A URL runs every read. A subcommand runs one read. Alias: search-console',
 };
 
 const OPTIONS: readonly Entry[] = [
@@ -37,14 +38,18 @@ const OPTIONS: readonly Entry[] = [
   ['--silent', 'Suppress progress and “Wrote …” on stderr'],
   [
     '--fail-on <fail|warn>',
-    'Exit 1 at or below the threshold. audit, geo-check, and seo-check use critical blockers and discovery findings for that report. Fetch tools use analyzer status. google-profile and config ignore it',
+    'Exit 1 at or below the threshold. audit, geo-check, and seo-check use critical blockers and discovery findings for that report. Fetch tools use analyzer status. google-profile, gsc, and config ignore it',
   ],
   [
     '--max-bytes <n>',
     'Response body cap (bytes, or 512kb / 2mb). Default 2mb. Range 1kb–32mb. Over the cap is an error',
   ],
+  [
+    '--init-date <YYYY-MM-DD>',
+    'gsc query start. With no --end-date, the end is 30 days later. Default window is unchanged when both are omitted',
+  ],
+  ['--end-date <YYYY-MM-DD>', 'gsc query end. With no --init-date, the start is 30 days earlier'],
   ['-g, --global', 'config: read and write $HOME/.searchunit.yaml'],
-  ['--unset', 'config: remove a key'],
   ['--color / --no-color', 'Force ANSI color on or off'],
   ['-h, --help', 'Show this help'],
   ['-V, --version', 'Print version'],
@@ -53,11 +58,23 @@ const OPTIONS: readonly Entry[] = [
 const CONFIG: readonly Entry[] = [
   [
     'merge',
-    'cwd .searchunit.yaml overlays $HOME/.searchunit.yaml, except crux_api_key. Flags override YAML',
+    'cwd .searchunit.yaml overlays $HOME/.searchunit.yaml, except crux_api_key, gsc_access_token, gsc_quota_project, and gsc_credentials. Flags override YAML',
   ],
   [
     'crux_api_key',
-    '$HOME YAML, searchunit config -g, or CRUX_API_KEY. Rejected without -g. Missing CrUX is not a failure',
+    '$HOME YAML, searchunit config set -g, or CRUX_API_KEY. Rejected without -g. Missing CrUX is not a failure',
+  ],
+  [
+    'gsc_access_token',
+    '$HOME YAML, searchunit config set -g, or GSC_ACCESS_TOKEN. Rejected without -g. An OAuth access token, valid about one hour. Missing token skips gsc',
+  ],
+  [
+    'gsc_quota_project',
+    '$HOME YAML, searchunit config set -g, or GSC_QUOTA_PROJECT. Rejected without -g. Google Cloud project id or number sent as x-goog-user-project. GOOGLE_CLOUD_QUOTA_PROJECT is the same value',
+  ],
+  [
+    'gsc_credentials',
+    '$HOME YAML, searchunit config set -g, or GSC_CREDENTIALS. Rejected without -g. Path to a service account JSON key. googleapis requests a webmasters.readonly token from it',
   ],
   ['output', 'Default for --format: table, json, html, or markdown'],
   ['max_body_bytes', 'Default for --max-bytes. --max-bytes overrides it'],
@@ -91,7 +108,15 @@ const EXAMPLES = [
   'searchunit audit https://example.com -o ./reports/audit.md',
   'searchunit schema-check https://example.com -o ./schema.json',
   'searchunit config',
-  'searchunit config -g crux_api_key YOUR_KEY',
+  'searchunit gsc check',
+  'searchunit gsc https://example.com',
+  'searchunit gsc query-pages https://example.com',
+  'searchunit gsc sitemaps https://example.com',
+  'searchunit gsc inspect https://example.com',
+  'searchunit config set -g crux_api_key YOUR_KEY',
+  'searchunit config set -g gsc_access_token YOUR_TOKEN',
+  'searchunit config set -g gsc_quota_project YOUR_PROJECT_ID',
+  'searchunit config set -g gsc_credentials /path/to/credentials.json',
 ];
 
 const CONFIG_OPERATIONS: readonly Entry[] = [
@@ -99,13 +124,12 @@ const CONFIG_OPERATIONS: readonly Entry[] = [
   ['list -g', 'List keys in $HOME/.searchunit.yaml'],
   ['(no args)', 'List every key: Local, Global, Default, Effective'],
   ['<key>', 'Show one key'],
-  ['<key> <value>', 'Set a key. Creates the file if it is missing'],
-  ['--unset <key>', 'Remove a key from the selected file'],
+  ['set <key> <value>', 'Set a key. Creates the file if it is missing'],
+  ['remove <key>', 'Remove a key from the selected file'],
 ];
 
 const CONFIG_OPTIONS: readonly Entry[] = [
   ['-g, --global', 'Read and write $HOME/.searchunit.yaml instead of the cwd file'],
-  ['--unset', 'Remove <key> from the selected file'],
   ['-f, --format', '<table|json>. Default: table. --json is the same as --format=json'],
   ['--agent', 'Plain markdown of the config payload on stdout'],
   ['--silent', 'Suppress “Created …” / “Updated …” on stderr'],
@@ -121,6 +145,18 @@ const CONFIG_NOTES: readonly Entry[] = [
     'crux_api_key',
     'Home YAML, -g, or CRUX_API_KEY. Without -g the command rejects and leaves the cwd file unchanged',
   ],
+  [
+    'gsc_access_token',
+    'Home YAML, -g, or GSC_ACCESS_TOKEN. Without -g the command rejects and leaves the cwd file unchanged. Printed as [redacted]',
+  ],
+  [
+    'gsc_quota_project',
+    'Home YAML, -g, or GSC_QUOTA_PROJECT. Without -g the command rejects and leaves the cwd file unchanged. A project id or number, printed in full',
+  ],
+  [
+    'gsc_credentials',
+    'Home YAML, -g, or GSC_CREDENTIALS. Without -g the command rejects and leaves the cwd file unchanged. A path to the service account JSON key',
+  ],
 ];
 
 const CONFIG_EXAMPLES = [
@@ -128,10 +164,13 @@ const CONFIG_EXAMPLES = [
   'searchunit config list',
   'searchunit config list -g',
   'searchunit config output',
-  'searchunit config output json',
-  'searchunit config --unset output',
-  'searchunit config -g crux_api_key YOUR_KEY',
-  'searchunit config -g --unset crux_api_key',
+  'searchunit config set output json',
+  'searchunit config remove output',
+  'searchunit config set -g crux_api_key YOUR_KEY',
+  'searchunit config remove -g crux_api_key',
+  'searchunit config set -g gsc_access_token YOUR_TOKEN',
+  'searchunit config set -g gsc_quota_project YOUR_PROJECT_ID',
+  'searchunit config set -g gsc_credentials /path/to/credentials.json',
 ];
 
 const MIN_DETAIL_WIDTH = 24;
@@ -238,8 +277,8 @@ export function formatHelp(): string {
 export function formatConfigHelp(): string {
   return helpDocument(
     'searchunit config',
-    'Get, set, or unset keys in .searchunit.yaml. Does not write reports.',
-    `  ${theme.dim('searchunit')} ${theme.command('config')} ${theme.dim('[list | key] [value]')} ${theme.option('[options]')}`,
+    'Get, set, or remove keys in .searchunit.yaml. Does not write reports.',
+    `  ${theme.dim('searchunit')} ${theme.command('config')} ${theme.dim('[list | set | remove | key]')} ${theme.option('[options]')}`,
     [
       { heading: 'Operations', body: alignEntries(CONFIG_OPERATIONS, theme.command) },
       { heading: 'Options', body: alignEntries(CONFIG_OPTIONS, theme.option) },

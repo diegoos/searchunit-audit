@@ -7,13 +7,36 @@ import { parseMaxBodyBytes } from './maxBodyBytes.ts';
 
 const CONFIG_FILENAME = '.searchunit.yaml';
 
-export const CONFIG_KEYS = ['crux_api_key', 'output', 'max_body_bytes'] as const;
+export const CONFIG_KEYS = [
+  'crux_api_key',
+  'gsc_access_token',
+  'gsc_quota_project',
+  'gsc_credentials',
+  'output',
+  'max_body_bytes',
+] as const;
 
 export type ConfigKey = (typeof CONFIG_KEYS)[number];
 
+const HOME_ONLY_KEYS = [
+  'crux_api_key',
+  'gsc_access_token',
+  'gsc_quota_project',
+  'gsc_credentials',
+] as const;
+
+type HomeOnlyKey = (typeof HOME_ONLY_KEYS)[number];
+
+const HOME_ONLY_ENV: Record<HomeOnlyKey, string> = {
+  crux_api_key: 'CRUX_API_KEY',
+  gsc_access_token: 'GSC_ACCESS_TOKEN',
+  gsc_quota_project: 'GSC_QUOTA_PROJECT',
+  gsc_credentials: 'GSC_CREDENTIALS',
+};
+
 /** True for keys applied from `$HOME` YAML, flags, or env — not from project cwd YAML. */
-export function isHomeOnlyConfigKey(key: ConfigKey): boolean {
-  return key === 'crux_api_key';
+export function isHomeOnlyConfigKey(key: ConfigKey): key is HomeOnlyKey {
+  return (HOME_ONLY_KEYS as readonly string[]).includes(key);
 }
 
 /** True when `CRUX_API_KEY` is set. The value itself stays out of reports. */
@@ -31,8 +54,8 @@ export function effectiveConfigValue(
   key: ConfigKey,
   layer: { local: string | undefined; global: string | undefined; default: string | undefined },
 ): string | undefined {
-  if (key === 'crux_api_key') {
-    const env = process.env.CRUX_API_KEY?.trim();
+  if (isHomeOnlyConfigKey(key)) {
+    const env = process.env[HOME_ONLY_ENV[key]]?.trim();
 
     if (env) {
       return env;
@@ -53,14 +76,20 @@ const CONFIG_DEFAULTS: Partial<Record<ConfigKey, string>> = {
 /** YAML keys that map onto one canonical config key. */
 
 function aliasNames(key: ConfigKey): readonly string[] {
-  return key === 'crux_api_key' ? ['crux_api_key', 'CRUX_API_KEY'] : [key];
+  if (isHomeOnlyConfigKey(key)) {
+    return [key, HOME_ONLY_ENV[key]];
+  }
+
+  return [key];
 }
 
 function stripHomeOnlyFromMapping(raw: Record<string, unknown>): Record<string, unknown> {
   const next = { ...raw };
 
-  for (const name of aliasNames('crux_api_key')) {
-    delete next[name];
+  for (const key of HOME_ONLY_KEYS) {
+    for (const name of aliasNames(key)) {
+      delete next[name];
+    }
   }
 
   return next;
@@ -69,6 +98,9 @@ function stripHomeOnlyFromMapping(raw: Record<string, unknown>): Record<string, 
 /** Values loaded from `.searchunit.yaml` (cwd, then `$HOME`). */
 export interface CliConfig {
   cruxApiKey?: string;
+  gscAccessToken?: string;
+  gscQuotaProject?: string;
+  gscCredentials?: string;
   output?: OutputFormat;
   maxBodyBytes?: number;
 }
@@ -80,7 +112,7 @@ export interface LoadConfigOptions {
 
 /**
  * Loads CLI config: cwd `.searchunit.yaml` overlays `$HOME` except
- * `crux_api_key` (home, flags, or env).
+ * `crux_api_key`, `gsc_access_token`, `gsc_quota_project`, and `gsc_credentials` (home, flags, or env).
  * `max_body_bytes` overlays from cwd like `output`.
  * Missing keys stay unset so the parser applies CLI defaults.
  */
@@ -97,11 +129,18 @@ export function loadConfig(opts: LoadConfigOptions = {}): CliConfig {
 }
 
 /**
- * Sets `CRUX_API_KEY` from config when the environment variable is unset.
+ * Sets home-only env vars from config when those variables are unset.
  */
 export function applyConfig(config: CliConfig): void {
-  if (config.cruxApiKey && !process.env.CRUX_API_KEY?.trim()) {
-    process.env.CRUX_API_KEY = config.cruxApiKey;
+  applyEnv('CRUX_API_KEY', config.cruxApiKey);
+  applyEnv('GSC_ACCESS_TOKEN', config.gscAccessToken);
+  applyEnv('GSC_QUOTA_PROJECT', config.gscQuotaProject);
+  applyEnv('GSC_CREDENTIALS', config.gscCredentials);
+}
+
+function applyEnv(name: string, value: string | undefined): void {
+  if (value && !process.env[name]?.trim()) {
+    process.env[name] = value;
   }
 }
 
@@ -314,6 +353,24 @@ function normalizeConfig(raw: Record<string, unknown>, path: string): CliConfig 
 
   if (crux) {
     config.cruxApiKey = crux;
+  }
+
+  const gsc = mappingGet(raw, 'gsc_access_token');
+
+  if (gsc) {
+    config.gscAccessToken = gsc;
+  }
+
+  const quotaProject = mappingGet(raw, 'gsc_quota_project');
+
+  if (quotaProject) {
+    config.gscQuotaProject = quotaProject;
+  }
+
+  const credentials = mappingGet(raw, 'gsc_credentials');
+
+  if (credentials) {
+    config.gscCredentials = credentials;
   }
 
   const output = mappingGet(raw, 'output');

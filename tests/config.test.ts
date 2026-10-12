@@ -60,6 +60,33 @@ describe('loadConfig', () => {
     writeFileSync(join(cwd, '.searchunit.yaml'), 'crux_api_key: cwd-key\n');
     expect(loadConfig({ cwd, home: tempDir() })).toEqual({});
   });
+  test('ignores gsc_access_token from cwd and reads it from home', () => {
+    const cwd = tempDir();
+    const home = tempDir();
+
+    dirs.push(cwd, home);
+    writeFileSync(join(cwd, '.searchunit.yaml'), 'gsc_access_token: cwd-token\n');
+    writeFileSync(join(home, '.searchunit.yaml'), 'GSC_ACCESS_TOKEN: home-token\n');
+    expect(loadConfig({ cwd, home })).toEqual({ gscAccessToken: 'home-token' });
+  });
+  test('ignores gsc_quota_project from cwd and reads it from home', () => {
+    const cwd = tempDir();
+    const home = tempDir();
+
+    dirs.push(cwd, home);
+    writeFileSync(join(cwd, '.searchunit.yaml'), 'gsc_quota_project: cwd-proj\n');
+    writeFileSync(join(home, '.searchunit.yaml'), 'gsc_quota_project: home-proj\n');
+    expect(loadConfig({ cwd, home })).toEqual({ gscQuotaProject: 'home-proj' });
+  });
+  test('ignores gsc_credentials from cwd and reads it from home', () => {
+    const cwd = tempDir();
+    const home = tempDir();
+
+    dirs.push(cwd, home);
+    writeFileSync(join(cwd, '.searchunit.yaml'), 'gsc_credentials: /cwd/key.json\n');
+    writeFileSync(join(home, '.searchunit.yaml'), 'gsc_credentials: /home/key.json\n');
+    expect(loadConfig({ cwd, home })).toEqual({ gscCredentials: '/home/key.json' });
+  });
   test('applies crux_api_key from home', () => {
     const cwd = tempDir();
     const home = tempDir();
@@ -148,6 +175,40 @@ describe('applyConfig', () => {
     applyConfig({ cruxApiKey: 'from-file' });
     expect(process.env.CRUX_API_KEY).toBe('from-env');
   });
+  test('sets GSC_ACCESS_TOKEN when the env is unset and does not override it', () => {
+    const previous = process.env.GSC_ACCESS_TOKEN;
+
+    try {
+      process.env.GSC_ACCESS_TOKEN = '';
+      applyConfig({ gscAccessToken: 'from-file' });
+      expect(process.env.GSC_ACCESS_TOKEN).toBe('from-file');
+      applyConfig({ gscAccessToken: 'other' });
+      expect(process.env.GSC_ACCESS_TOKEN).toBe('from-file');
+    } finally {
+      if (previous === undefined) {
+        delete process.env.GSC_ACCESS_TOKEN;
+      } else {
+        process.env.GSC_ACCESS_TOKEN = previous;
+      }
+    }
+  });
+  test('sets GSC_QUOTA_PROJECT when the env is unset and does not override it', () => {
+    const previous = process.env.GSC_QUOTA_PROJECT;
+
+    try {
+      process.env.GSC_QUOTA_PROJECT = '';
+      applyConfig({ gscQuotaProject: 'from-file' });
+      expect(process.env.GSC_QUOTA_PROJECT).toBe('from-file');
+      applyConfig({ gscQuotaProject: 'other' });
+      expect(process.env.GSC_QUOTA_PROJECT).toBe('from-file');
+    } finally {
+      if (previous === undefined) {
+        delete process.env.GSC_QUOTA_PROJECT;
+      } else {
+        process.env.GSC_QUOTA_PROJECT = previous;
+      }
+    }
+  });
 });
 
 describe('config mapping helpers', () => {
@@ -206,7 +267,6 @@ function flags(over: Partial<CliFlags> = {}): CliFlags {
     failOn: undefined,
     rest: [],
     global: false,
-    unset: false,
     agent: false,
     outputPath: undefined,
     maxBytes: DEFAULT_MAX_BODY_BYTES,
@@ -253,7 +313,7 @@ describe('config command', () => {
     dirs.push(cwd, home);
     const dirsOpt = { cwd, home };
 
-    const set = await capture(() => runConfig('output', flags({ rest: ['json'] }), dirsOpt));
+    const set = await capture(() => runConfig('set', flags({ rest: ['output', 'json'] }), dirsOpt));
 
     expect(set.code).toBe(0);
     expect(set.logs.join('\n')).toMatch(/Config/);
@@ -273,9 +333,9 @@ describe('config command', () => {
     expect(list.logs.join('\n')).toContain('output');
     expect(list.logs.join('\n')).toContain('json');
 
-    const unset = await capture(() => runConfig('output', flags({ unset: true }), dirsOpt));
+    const removed = await capture(() => runConfig('remove', flags({ rest: ['output'] }), dirsOpt));
 
-    expect(unset.code).toBe(0);
+    expect(removed.code).toBe(0);
     expect(loadConfig({ cwd, home }).output).toBeUndefined();
     expect(existsSync(join(cwd, '.searchunit.yaml'))).toBe(true);
   });
@@ -287,12 +347,12 @@ describe('config command', () => {
     const dirsOpt = { cwd, home };
     const path = join(cwd, '.searchunit.yaml');
     const created = await capture(() =>
-      runConfig('output', flags({ silent: false, rest: ['json'] }), dirsOpt),
+      runConfig('set', flags({ silent: false, rest: ['output', 'json'] }), dirsOpt),
     );
     expect(created.errs.join('\n')).toContain('Created');
     expect(created.errs.join('\n')).toContain(path);
     const updated = await capture(() =>
-      runConfig('output', flags({ silent: false, rest: ['html'] }), dirsOpt),
+      runConfig('set', flags({ silent: false, rest: ['output', 'html'] }), dirsOpt),
     );
     expect(updated.errs.join('\n')).toContain('Updated');
     expect(updated.errs.join('\n')).toContain(path);
@@ -306,7 +366,7 @@ describe('config command', () => {
 
     expect(existsSync(path)).toBe(false);
     const set = await capture(() =>
-      runConfig('output', flags({ rest: ['json'] }), { cwd, home: tempDir() }),
+      runConfig('set', flags({ rest: ['output', 'json'] }), { cwd, home: tempDir() }),
     );
     expect(set.code).toBe(0);
     expect(readFileSync(path, 'utf8')).toContain('output: json');
@@ -318,7 +378,7 @@ describe('config command', () => {
     dirs.push(cwd, home);
 
     const set = await capture(() =>
-      runConfig('output', flags({ global: true, rest: ['html'] }), { cwd, home }),
+      runConfig('set', flags({ global: true, rest: ['output', 'html'] }), { cwd, home }),
     );
     expect(set.code).toBe(0);
     expect(readFileSync(join(home, '.searchunit.yaml'), 'utf8')).toContain('output: html');
@@ -331,7 +391,19 @@ describe('config command', () => {
 
     dirs.push(cwd, home);
     await expect(
-      runConfig('crux_api_key', flags({ rest: ['secret'] }), { cwd, home }),
+      runConfig('set', flags({ rest: ['crux_api_key', 'secret'] }), { cwd, home }),
+    ).rejects.toThrow('project cwd YAML is not applied');
+    await expect(
+      runConfig('set', flags({ rest: ['gsc_access_token', 'ya29.secret'] }), { cwd, home }),
+    ).rejects.toThrow('project cwd YAML is not applied');
+    await expect(
+      runConfig('set', flags({ rest: ['gsc_quota_project', 'my-project'] }), { cwd, home }),
+    ).rejects.toThrow('project cwd YAML is not applied');
+    await expect(
+      runConfig('set', flags({ rest: ['gsc_credentials', '/tmp/credentials.json'] }), {
+        cwd,
+        home,
+      }),
     ).rejects.toThrow('project cwd YAML is not applied');
     expect(existsSync(cwdPath)).toBe(false);
   });
@@ -340,9 +412,9 @@ describe('config command', () => {
     const home = tempDir();
 
     dirs.push(cwd, home);
-    await expect(runConfig('crux_api_key', flags({ unset: true }), { cwd, home })).rejects.toThrow(
-      'project cwd YAML is not applied',
-    );
+    await expect(
+      runConfig('remove', flags({ rest: ['crux_api_key'] }), { cwd, home }),
+    ).rejects.toThrow('project cwd YAML is not applied');
   });
   test('config get effective ignores cwd home-only keys', async () => {
     const cwd = tempDir();
@@ -378,9 +450,12 @@ describe('config command', () => {
     const cwd = tempDir();
 
     dirs.push(cwd);
-    await expect(runConfig('nope', flags({ rest: ['x'] }), { cwd, home: cwd })).rejects.toThrow(
-      /Unknown config key/,
-    );
+    await expect(
+      runConfig('set', flags({ rest: ['nope', 'x'] }), { cwd, home: cwd }),
+    ).rejects.toThrow(/Unknown config key/);
+    await expect(
+      runConfig('output', flags({ rest: ['json'] }), { cwd, home: cwd }),
+    ).rejects.toThrow(/config set/);
   });
   test('config list reads cwd YAML and ignores the home file', async () => {
     const cwd = tempDir();
@@ -446,7 +521,10 @@ describe('config command', () => {
 
     dirs.push(cwd, home);
     writeFileSync(join(cwd, '.searchunit.yaml'), 'crux_api_key: local-secret\n');
-    writeFileSync(join(home, '.searchunit.yaml'), 'crux_api_key: home-secret\n');
+    writeFileSync(
+      join(home, '.searchunit.yaml'),
+      'crux_api_key: home-secret\ngsc_access_token: ya29.home-token\n',
+    );
     const list = await capture(() => runConfig(undefined, flags({ json: true }), { cwd, home }));
 
     expect(list.code).toBe(0);
@@ -457,6 +535,8 @@ describe('config command', () => {
     expect(payload.values.crux_api_key).toBe('[redacted]');
     expect(payload.layers.crux_api_key?.local).toBe('[redacted]');
     expect(payload.layers.crux_api_key?.global).toBe('[redacted]');
+    expect(payload.layers.gsc_access_token?.global).toBe('[redacted]');
+    expect(list.logs.join('\n')).not.toContain('ya29.home-token');
   });
   test('unset json redacts leftover local crux_api_key', async () => {
     const cwd = tempDir();
@@ -465,13 +545,21 @@ describe('config command', () => {
     dirs.push(cwd, home);
     writeFileSync(join(cwd, '.searchunit.yaml'), 'crux_api_key: local-secret\n');
     writeFileSync(join(home, '.searchunit.yaml'), 'crux_api_key: home-secret\n');
-    const unset = await capture(() =>
-      runConfig('crux_api_key', flags({ unset: true, json: true, global: true }), { cwd, home }),
+    const removed = await capture(() =>
+      runConfig('remove', flags({ rest: ['crux_api_key'], json: true, global: true }), {
+        cwd,
+        home,
+      }),
     );
 
-    expect(unset.code).toBe(0);
-    const payload = JSON.parse(unset.logs.join('\n')) as { local: string | null };
-    const dumped = unset.logs.join('\n');
+    expect(removed.code).toBe(0);
+    const payload = JSON.parse(removed.logs.join('\n')) as {
+      action: string;
+      local: string | null;
+    };
+    const dumped = removed.logs.join('\n');
+
+    expect(payload.action).toBe('remove');
 
     expect(payload.local).toBe('[redacted]');
     expect(dumped).not.toContain('local-secret');
