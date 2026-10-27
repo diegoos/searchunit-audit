@@ -1,6 +1,14 @@
 import type { CitabilitySummary } from './citabilityBlocks.ts';
 import type { StructuredDataSummary } from './htmlParser.ts';
+import type { ExternalResources } from './parsers/externalResources.ts';
+import type { ImageSignals, VideoSignal } from './parsers/imageDiscover.ts';
 import type { PageKind, SiteType } from './pageClassification.ts';
+import type {
+  HeadingOutlineItem,
+  HiddenText,
+  MixedContent,
+  TrustPages,
+} from './parsers/pageHygiene.ts';
 import type { RedirectSignals } from './redirectSignals.ts';
 import type { RobotsTxtParseResult } from './robotsTxtParser.ts';
 
@@ -65,18 +73,32 @@ export interface CruxFetchResult {
   errors: string[];
 }
 
+/** One llms.txt problem. `line` and `text` are set for syntax errors only. */
+export interface LlmsTxtIssue {
+  code: string;
+  line: number | null;
+  /** Snippet or section name of the line, trimmed to 120 characters. */
+  text: string | null;
+}
+
 export interface LlmsTxtResult {
   url: string;
   exists: boolean;
   /** Same present / missing / error split as robots.txt (`classifyRobotsHttp`). */
   fetchStatus: 'present' | 'missing' | 'error';
+  /** Short error code when the file failed to load after retries, else null. */
+  fetchError: string | null;
   format_valid: boolean;
   has_title: boolean;
   has_sections: boolean;
   has_links: boolean;
   section_count: number;
   link_count: number;
-  issues: string[];
+  links: { title: string; url: string }[];
+  linksTruncated: boolean;
+  /** True when a link matches the audited page before the 100-link cap. */
+  linksToAuditedUrl: boolean;
+  issues: LlmsTxtIssue[];
   content: string | null;
   full_content: string | null;
   contentType: string;
@@ -90,6 +112,15 @@ export interface SitemapParseResult {
   url_count: number;
   audited_url_listed: boolean;
   audited_url_lastmod: string | null;
+  urls: { loc: string; lastmod: string | null }[];
+  urlsTruncated: boolean;
+  /**
+   * `partial` when a declared file failed or the file cap stopped the walk.
+   * Then `audited_url_listed: false` is not proof that the page is unlisted.
+   */
+  coverage: 'complete' | 'partial';
+  /** Sitemap files read (roots, index files, and child urlsets). */
+  filesRead: number;
 }
 
 export interface SecurityHeadersSummary {
@@ -101,10 +132,64 @@ export interface SecurityHeadersSummary {
   x_robots_tag: string | null;
 }
 
+export interface MobilePageSnapshot {
+  statusCode: number;
+  byteLength: number;
+  wordCount: number;
+  h1: string[];
+  jsRenderingRisk: { isLikelyCsr: boolean; reason: string | null };
+  canonicalUrl: string | null;
+  effectiveRobotsDirective: string | null;
+  viewport: boolean;
+  structuredDataTypes: string[];
+  internalLinkCount: number;
+  visibleTextSha256: string;
+  visibleTextExcerpt: string;
+}
+
+export interface PageLink {
+  href: string;
+  text: string;
+  /** `aria-label` of the anchor, trimmed, or null. */
+  ariaLabel: string | null;
+  /** Alt of the first `img` inside the anchor with a non-empty alt, or null. */
+  imgAlt: string | null;
+}
+
+export interface LinkCheck {
+  href: string;
+  scope: 'internal';
+  /** Final HTTP status, or null when the fetch failed. */
+  status: number | null;
+  finalUrl: string | null;
+  redirects: number;
+  /** Fetch error code (`timeout`, `blocked`, `network`, ...) or null. */
+  error: string | null;
+}
+
+export interface LinkStatusReport {
+  /** `skipped` outside `audit`. */
+  status: 'completed' | 'skipped';
+  checked: number;
+  /** Stored same-site links that could be probed. Outbound links are counted, never probed. */
+  candidates: number;
+  results: LinkCheck[];
+}
+
+export interface SnippetDirectives {
+  nosnippet: boolean;
+  maxSnippet: string | null;
+  noarchive: boolean;
+  unavailableAfter: string | null;
+  dataNosnippet: boolean;
+}
+
 export interface AuditedPageSnapshot {
   url: string;
   statusCode: number;
   byteLength: number;
+  /** Hex SHA-256 of this page's HTML body. Scoring does not read it. */
+  bodySha256: string;
   redirectCount: number;
   title: string | null;
   metaDescription: string | null;
@@ -113,24 +198,71 @@ export interface AuditedPageSnapshot {
   effectiveRobotsDirective: string | null;
   lang: string | null;
   robotsStatus: string;
+  /** Short error code when robots.txt failed to load after retries (`timeout`, `http_503`, ...). */
+  robotsFetchError: string | null;
   sitemapStatus: string;
-  internalLinks: string[];
+  internalLinks: PageLink[];
+  internalLinkCount: number;
+  internalLinksTruncated: boolean;
+  outboundLinks: PageLink[];
+  outboundLinksTruncated: boolean;
+  snippetDirectives: SnippetDirectives;
+  /** Same-host page keys, built before the 50-link display cap. */
+  internalLinkIndex: string[];
+  internalLinkIndexTruncated: boolean;
+  /** Words in the main content root (main, article, else body without chrome). */
   wordCount: number;
+  /** Words in the whole visible body, page chrome included. */
+  bodyWordCount: number;
+  /** Main content text, the root `wordCount` reads, cut at 20000 characters. */
+  mainText: string;
+  mainTextTruncated: boolean;
+  /** Up to 5 main content tables, each up to 30 rows of up to 10 cell texts (200 characters each). */
+  tables: string[][][];
+  mixedContent: MixedContent;
+  hiddenText: HiddenText;
+  /** `<meta charset>` or http-equiv charset, lowercase. */
+  charset: string | null;
+  /** First same-site about, contact, privacy, and terms links. */
+  trustPages: TrustPages;
+  /** Cross-origin resource origins per kind, and inline script and style counts. */
+  externalResources: ExternalResources;
   structuredData: StructuredDataSummary;
   headings: {
     h1: string[];
     h1Count: number;
     h1ElementCount: number;
+    h2: string[];
     h2Count: number;
+    h2NonEmpty: number;
+    h3: string[];
     h3Count: number;
+    h3NonEmpty: number;
+    /** H1–H6 in document order, at most 60. */
+    outline: HeadingOutlineItem[];
   };
   viewport: boolean;
   hreflang: string[];
-  dates: { published: string | null; modified: string | null };
-  author: { hasAuthor: boolean; names: string[] };
+  hreflangLinks: { lang: string; href: string }[];
+  headerCanonical: string | null;
+  headerHreflang: { lang: string; href: string }[];
+  robotsNoindexSource: 'meta' | 'header' | 'bot' | null;
+  pagination: { next: string | null; prev: string | null };
+  breadcrumbParent: string | null;
+  visibleTextSha256: string;
+  visibleTextExcerpt: string;
+  dates: { published: string | null; modified: string | null; visible: string | null };
+  author: { hasAuthor: boolean; names: string[]; urls: string[] };
   social: {
-    openGraph: { title: boolean; image: boolean; type: string | null };
-    twitter: { card: boolean };
+    openGraph: {
+      title: string | null;
+      description: string | null;
+      image: string | null;
+      type: string | null;
+      url: string | null;
+      locale: string | null;
+    };
+    twitter: { card: string | null };
   };
   contentSignals: {
     paragraphs: number;
@@ -146,14 +278,17 @@ export interface AuditedPageSnapshot {
   markupFormats: {
     has_microdata: boolean;
     microdata_item_count: number;
+    microdata_types: string[];
     has_rdfa: boolean;
     rdfa_property_count: number;
+    rdfa_types: string[];
     jsonld_only: boolean;
     jsonld_blocks_missing_type: number;
   };
   metaRobotsByBot: Record<string, string>;
   jsRenderingRisk: { isLikelyCsr: boolean; reason: string | null };
-  images: { total: number; withAlt: number; missingAlt: number };
+  images: ImageSignals;
+  videos: VideoSignal[];
   discover: { maxImagePreviewLarge: boolean; hasRepresentativeImage: boolean };
   citability: CitabilitySummary;
   hasSpeakable: boolean;
@@ -171,10 +306,30 @@ export interface PlatformSignals {
   has_author: boolean;
 }
 
+/**
+ * Audit level of this run. The CLI scores one page. Every other request is
+ * evidence for that page, counted in `contextFetches`.
+ */
+export interface AuditScope {
+  level: 'page';
+  pagesScored: 1;
+  contextFetches: {
+    robots: boolean;
+    sitemapFiles: number;
+    llmsTxt: boolean;
+    crux: boolean;
+    mobilePage: boolean;
+    linksProbed: number;
+  };
+}
+
 /** Snapshot of one local discovery run, consumed by scoring and findings. */
 export interface DiscoveryResult {
   domain: string;
   auditedUrl: string;
+  auditScope: AuditScope;
+  /** ISO time of the audited page fetch. Freshness scoring measures age from it. */
+  fetchedAt: string;
   pageKind: PageKind;
   siteType: SiteType;
   technicalUrls: string[];
@@ -187,6 +342,11 @@ export interface DiscoveryResult {
   redirects: RedirectSignals;
   platform_signals: PlatformSignals;
   auditedPage: AuditedPageSnapshot;
+  mobilePage: MobilePageSnapshot | null;
+  /** Why `mobilePage` is null (fetch error code or `http_<status>`), else null. */
+  mobileFetchError: string | null;
+  /** Status probe of links on the audited page. Only `audit` runs it. */
+  linkStatus: LinkStatusReport;
   pagesSampled: number;
 }
 

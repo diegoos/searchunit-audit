@@ -2,10 +2,12 @@
  * GEO component scoring for local audits. Keep scores here; do not add them
  * in commands or render.
  */
+import { isLoopbackHostname, isLoopbackIpString } from '../ip-policy.ts';
 import { DEFAULT_MAX_BODY_BYTES } from '../lib/maxBodyBytes.ts';
 import type { CrawlerAccessStatus } from './robotsTxtParser.ts';
 import { expectedSchemaTypes } from './pageClassification.ts';
 import { isNoindexCombined, isPageIndexable } from './robotsDirective.ts';
+import { hreflangIssues } from './hreflang.ts';
 import {
   CITABILITY_IDEAL_MAX_WORDS,
   CITABILITY_IDEAL_MIN_WORDS,
@@ -14,7 +16,7 @@ import {
   type CitabilityDimensions,
   type CitabilitySummary,
 } from './citabilityBlocks.ts';
-import { STATISTIC_SNIPPET_RE } from './parsers/contentSignals.ts';
+import { STATISTIC_SNIPPET_GLOBAL_RE, STATISTIC_SNIPPET_RE } from './parsers/contentSignals.ts';
 import type {
   CruxUrlResult,
   DiscoveryResult,
@@ -60,6 +62,7 @@ const CRAWLER_WEIGHT: Record<string, number> = {
   'OAI-SearchBot': 2,
   'ChatGPT-User': 2,
   ClaudeBot: 2,
+  'Claude-SearchBot': 0,
   PerplexityBot: 2,
   GPTBot: 0.8,
   'Google-Extended': 0.8,
@@ -71,7 +74,7 @@ const CRAWLER_WEIGHT: Record<string, number> = {
   'cohere-ai': 0.7,
 };
 
-const LIVE_RETRIEVAL_BOTS = new Set([
+export const LIVE_RETRIEVAL_BOTS = new Set([
   'OAI-SearchBot',
   'ChatGPT-User',
   'ClaudeBot',
@@ -154,6 +157,20 @@ function isHttps(url: string): boolean {
   return url.startsWith('https://');
 }
 
+/**
+ * A loopback target (dev server). Its HTTPS state is not judged: the audit
+ * treats it as served over HTTPS and reports that it did so.
+ */
+export function isLocalTarget(url: string): boolean {
+  try {
+    const { hostname } = new URL(url);
+
+    return isLoopbackHostname(hostname) || isLoopbackIpString(hostname);
+  } catch {
+    return false;
+  }
+}
+
 function crawlerBotScore(status: CrawlerAccessStatus): number {
   if (status === 'allowed') {
     return 100;
@@ -179,11 +196,25 @@ function scoreCrawlerAccess(discovery: DiscoveryResult): number {
   for (const { bot, status } of entries) {
     const w = CRAWLER_WEIGHT[bot] ?? 1;
 
+    if (w === 0) {
+      continue;
+    }
+
     totalWeight += w;
     earned += (crawlerBotScore(status) / 100) * w;
   }
 
   return totalWeight === 0 ? 50 : clamp((earned / totalWeight) * 100);
+}
+
+/** Search crawlers whose robots.txt access the SEO score and findings read. */
+export const SEARCH_BOTS = ['Googlebot', 'Bingbot'] as const;
+
+/** True when robots.txt blocks Googlebot or Bingbot on the audited path. */
+function searchBotBlocked(discovery: DiscoveryResult): boolean {
+  return discovery.crawlerAccess.crawlers.some(
+    (c) => (SEARCH_BOTS as readonly string[]).includes(c.bot) && c.status === 'blocked',
+  );
 }
 
 function liveRetrievalFullyBlocked(discovery: DiscoveryResult): boolean {
@@ -240,7 +271,9 @@ function readCoreWebVitals(discovery: DiscoveryResult): CwvReading {
     return { score: null, evidence: 'insufficient', poor: false };
   }
 
-  const poor = CORE_VITALS.some((name) => vitalRating(name) === 'poor');
+  // Origin data still feeds the score, but a site-wide record does not cap this page.
+
+  const poor = urlHasVital && CORE_VITALS.some((name) => vitalRating(name) === 'poor');
   const avg = ratings.reduce((sum, r) => sum + (RATING_SCORE[r] ?? 50), 0) / ratings.length;
 
   return { score: avg, evidence, poor };
@@ -287,7 +320,7 @@ function indexabilityScore(
     indexability = 0;
   }
 
-  if (page.hreflang.length > 0) {
+  if (page.hreflang.length > 0 && hreflangIssues(page).length === 0) {
     indexability = Math.min(100, indexability + 10);
   }
 
@@ -347,12 +380,13 @@ function scoreTechnical(discovery: DiscoveryResult, collect?: CriticalBlocker[])
     sh.x_robots_tag,
     p.metaRobotsByBot,
   );
-  const https = isHttps(p.url);
+  const localTarget = isLocalTarget(p.url);
+  const https = isHttps(p.url) || localTarget;
   const cwv = readCoreWebVitals(discovery);
 
   const crawlability =
     (ok2xx ? 40 : 0) +
-    (p.robotsStatus === 'present' ? 30 : 0) +
+    (p.robotsStatus === 'present' && !searchBotBlocked(discovery) ? 30 : 0) +
     (p.sitemapStatus === 'present' ? 30 : 0);
 
   const headerCount = [sh.hsts, sh.csp, sh.x_frame, sh.x_content_type, sh.referrer_policy].filter(
@@ -361,7 +395,7 @@ function scoreTechnical(discovery: DiscoveryResult, collect?: CriticalBlocker[])
   const security = (https ? 60 : 0) + headerCount * 8;
   const mobile = p.viewport ? 100 : 20;
 
-  let score = weightedAverage([
+  const score = weightedAverage([
     { value: crawlability, weight: 0.25 },
     { value: cwv.score, weight: 0.25 },
     { value: indexabilityScore(p, indexable, noindex), weight: 0.2 },
@@ -373,24 +407,35 @@ function scoreTechnical(discovery: DiscoveryResult, collect?: CriticalBlocker[])
     return { score: null, evidence: 'insufficient' };
   }
 
-  score = applyTechnicalCaps(score, discovery, noindex, https, cwv.poor, collect);
-  const evidence: EvidenceType = cwv.score === null ? 'insufficient' : cwv.evidence;
+  const capped = applyTechnicalCaps(score, discovery, noindex, https, cwv.poor, collect);
 
-  return { score, evidence };
+  // Without field CWV the component is not measured. Caps are still collected above.
+
+  if (cwv.score === null) {
+    return { score: null, evidence: 'insufficient' };
+  }
+
+  return { score: capped, evidence: cwv.evidence };
 }
 
-function freshnessScore(modified: string | null): number {
+/**
+ * Freshness of `modified` measured against `fetchedAt` (the page fetch time
+ * stored in the payload), not the wall clock, so a payload rescored later
+ * gives the same number.
+ */
+function freshnessScore(modified: string | null, fetchedAt: string): number {
   if (!modified) {
     return 35;
   }
 
   const ts = Date.parse(modified);
+  const now = Date.parse(fetchedAt);
 
-  if (Number.isNaN(ts)) {
+  if (Number.isNaN(ts) || Number.isNaN(now)) {
     return 40;
   }
 
-  const days = (Date.now() - ts) / (1000 * 60 * 60 * 24);
+  const days = (now - ts) / (1000 * 60 * 60 * 24);
 
   if (days < 0) {
     return 35;
@@ -471,7 +516,7 @@ function scoreContentQuality(
     (p.title && p.metaDescription ? 15 : 0);
 
   const depth = contentDepth(p.wordCount);
-  const freshness = freshnessScore(p.dates.modified);
+  const freshness = freshnessScore(p.dates.modified, discovery.fetchedAt);
   const editorial = editorialScore(p);
 
   const imageAltScore =
@@ -577,7 +622,7 @@ function hasCitabilityStats(text: string): boolean {
 }
 
 function countCitabilitySignals(text: string): number {
-  return text.match(/\d+([.,]\d+)?%|\$\d+|\b\d{4}\b/g)?.length ?? 0;
+  return text.match(STATISTIC_SNIPPET_GLOBAL_RE)?.length ?? 0;
 }
 
 function hasCitabilityList(text: string): boolean {
@@ -700,8 +745,14 @@ function scoreCitabilityUniqueness(text: string): number {
   return Math.min(100, score);
 }
 
+const CITABILITY_TEXT_CAP = 1500;
+const CITABILITY_PREVIEW_CAP = 120;
+
 /** Five-dimension citability scores (GEO). Parser only supplies candidate texts. */
-export function scoreCitabilityTexts(texts: string[]): CitabilitySummary {
+export function scoreCitabilityTexts(
+  texts: string[],
+  textCap = CITABILITY_TEXT_CAP,
+): CitabilitySummary {
   const blocks: CitabilityBlockScore[] = texts.map((text) => {
     const words = citabilityWordCount(text);
     const dimensions: CitabilityDimensions = {
@@ -720,7 +771,8 @@ export function scoreCitabilityTexts(texts: string[]): CitabilitySummary {
     );
 
     return {
-      text_preview: text.slice(0, 120),
+      text: Number.isFinite(textCap) ? text.slice(0, textCap) : text,
+      text_preview: text.slice(0, CITABILITY_PREVIEW_CAP),
       word_count: words,
       score,
       dimensions,
@@ -730,48 +782,36 @@ export function scoreCitabilityTexts(texts: string[]): CitabilitySummary {
     };
   });
   const scored = blocks.filter((b) => b.word_count >= 25);
-  const top = scored.toSorted((a, b) => b.score - a.score).slice(0, 5);
+  const ranked = scored.toSorted((a, b) => b.score - a.score);
+  const top = ranked.slice(0, 5);
   const page_score =
     top.length === 0 ? 20 : Math.round(top.reduce((s, b) => s + b.score, 0) / top.length);
+  const kept = ranked.slice(0, 12);
+  const weakBlocks = ranked
+    .slice(12)
+    .slice(-12)
+    .toSorted((a, b) => a.score - b.score);
 
   return {
-    blocks: scored.slice(0, 12),
+    blocks: kept,
+    weakBlocks,
+    blocksTruncated: ranked.length > kept.length + weakBlocks.length,
+    opening: null,
     page_score,
     citation_ready_blocks: scored.filter((b) => b.citation_ready).length,
     ideal_range_blocks: scored.filter((b) => b.in_ideal_word_range).length,
   };
 }
 
-function scorePageCitability(discovery: DiscoveryResult): number {
-  const p = discovery.auditedPage;
-  let score = p.citability.page_score;
-
-  if (p.discover.hasRepresentativeImage) {
-    score = Math.min(100, score + 5);
-  }
-
-  if (p.discover.maxImagePreviewLarge) {
-    score = Math.min(100, score + 5);
-  }
-
-  return clamp(score);
-}
-
+/**
+ * Text citability of the audited page. Crawler access lives in platform
+ * optimization, so neither signal counts twice in the GEO kind score.
+ */
 function scoreAiCitability(
   discovery: DiscoveryResult,
   collect?: CriticalBlocker[],
 ): ComponentResult {
-  const pageScore = scorePageCitability(discovery);
-  const crawlerScore = scoreCrawlerAccess(discovery);
-
-  let score = weightedAverage([
-    { value: pageScore, weight: 0.7 },
-    { value: crawlerScore, weight: 0.3 },
-  ]);
-
-  if (score === null) {
-    score = 40;
-  }
+  let score = discovery.auditedPage.citability.page_score;
 
   if (liveRetrievalFullyBlocked(discovery)) {
     score = Math.min(score, 30);
@@ -782,7 +822,56 @@ function scoreAiCitability(
     });
   }
 
-  return { score: clamp(score), evidence: 'direct' };
+  return { score: clamp(score), evidence: 'inferred' };
+}
+
+const LLMS_STATUS_SCORE: Record<DiscoveryResult['llms_txt_status'], number | null> = {
+  absent: 40,
+  error: null,
+  malformed: 30,
+  limited: 60,
+  useful: 85,
+  comprehensive: 100,
+};
+
+function answerFormatScore(discovery: DiscoveryResult): number {
+  const signals = discovery.platform_signals;
+  const content = discovery.auditedPage.contentSignals;
+
+  return (
+    (signals.question_heading_count > 0 ? 30 : 0) +
+    (signals.faq_pattern ? 30 : 0) +
+    (signals.table_count > 0 || signals.list_count > 0 ? 20 : 0) +
+    (content.hasDefinitionPattern ? 20 : 0)
+  );
+}
+
+function entitySignalScore(discovery: DiscoveryResult): number {
+  const sd = discovery.auditedPage.structuredData;
+
+  return (
+    (sd.blocks.some((b) => b.sameAs.length > 0) ? 50 : 0) +
+    (discovery.platform_signals.has_author ? 25 : 0) +
+    (discovery.platform_signals.visible_dates ? 25 : 0)
+  );
+}
+
+/**
+ * How well AI platforms can reach and reuse the page: crawler access,
+ * llms.txt, answer formats, and entity signals. Independent of the other
+ * components, and heuristic, so the evidence is `inferred`.
+ */
+function scorePlatform(discovery: DiscoveryResult): ComponentResult {
+  const score = weightedAverage([
+    { value: scoreCrawlerAccess(discovery), weight: 0.4 },
+    { value: LLMS_STATUS_SCORE[discovery.llms_txt_status], weight: 0.15 },
+    { value: answerFormatScore(discovery), weight: 0.25 },
+    { value: entitySignalScore(discovery), weight: 0.2 },
+  ]);
+
+  return score === null
+    ? { score: null, evidence: 'insufficient' }
+    : { score: clamp(score), evidence: 'inferred' };
 }
 
 export function computeAuditScores(
@@ -795,22 +884,12 @@ export function computeAuditScores(
   const citability = scoreAiCitability(discovery, blockers);
   const structured = scoreStructuredData(discovery, blockers);
 
-  const platformParts: WeightedScorePart[] = [
-    { value: technical.score, weight: 1 },
-    { value: content.score, weight: 1 },
-    { value: citability.score, weight: 1 },
-  ];
-  const platformScore = weightedAverage(platformParts);
-
   const raw: Record<ScoreComponentId, ComponentResult> = {
     ai_citability_visibility: citability,
     content_quality: content,
     technical_foundations: technical,
     structured_data: structured,
-    platform_optimization: {
-      score: platformScore === null ? null : clamp(platformScore),
-      evidence: platformScore === null ? 'insufficient' : 'inferred',
-    },
+    platform_optimization: scorePlatform(discovery),
   };
   const breakdown: ScoreBreakdownItem[] = (Object.keys(COMPONENT_WEIGHT) as ScoreComponentId[]).map(
     (component) => {

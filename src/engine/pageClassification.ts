@@ -30,7 +30,18 @@ function hasSchemaType(types: Set<string>, names: readonly string[]): boolean {
   return names.some((name) => types.has(name));
 }
 
-function classifyPageKind(page: ParsedPage, types: Set<string>): PageKind {
+/** Root path with no query: the origin homepage. */
+function isRootPath(pageUrl: string): boolean {
+  try {
+    const url = new URL(pageUrl);
+
+    return url.pathname === '/' && url.search === '';
+  } catch {
+    return false;
+  }
+}
+
+function classifyPageKind(page: ParsedPage, types: Set<string>, pageUrl: string): PageKind {
   const og = ogType(page);
 
   if (types.has('product') || og === 'product' || og.startsWith('product.')) {
@@ -49,8 +60,14 @@ function classifyPageKind(page: ParsedPage, types: Set<string>): PageKind {
     return 'listing';
   }
 
-  if (og === 'website') {
+  // og:type `website` is common on inner pages, so the path decides.
+
+  if (isRootPath(pageUrl)) {
     return 'home';
+  }
+
+  if (page.contentSignals.listingPattern) {
+    return 'listing';
   }
 
   return UNDEFINED_TYPE;
@@ -76,10 +93,13 @@ function classifySiteType(types: Set<string>, pageKind: PageKind): SiteType {
   return UNDEFINED_TYPE;
 }
 
-/** Classifies site type and page kind from schema.org types and Open Graph type. */
-export function classifyPage(page: ParsedPage): { siteType: SiteType; pageKind: PageKind } {
+/** Classifies site type and page kind from schema.org types, Open Graph type, and the final URL path. */
+export function classifyPage(
+  page: ParsedPage,
+  pageUrl: string,
+): { siteType: SiteType; pageKind: PageKind } {
   const types = new Set(page.structuredData.types.map((type) => type.toLowerCase()));
-  const pageKind = classifyPageKind(page, types);
+  const pageKind = classifyPageKind(page, types, pageUrl);
 
   return { siteType: classifySiteType(types, pageKind), pageKind };
 }

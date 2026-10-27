@@ -33,15 +33,15 @@ beforeAll(() => {
 describe('formatReportHeader', () => {
   test('uses one layout for title, url, label, extra, legend, and KPIs', () => {
     const text = formatReportHeader({
-      title: 'Site Audit',
+      title: 'Page Audit',
       url: 'https://example.com/',
       score: 80,
       label: 'Strong',
       extra: 'confidence 80  ·  evidence high',
       kpis: [{ status: 'pass', label: 'Title', value: 'present' }],
     });
-    expect(text.startsWith('\nSite Audit  ·  80')).toBe(true);
-    expect(text).toMatch(/Site Audit[^\n]*\n\nhttps:\/\/example.com\//);
+    expect(text.startsWith('\nPage Audit  ·  80')).toBe(true);
+    expect(text).toMatch(/Page Audit[^\n]*\n\nhttps:\/\/example.com\//);
     expect(text).toContain('Strong');
     expect(text).toContain('confidence 80  ·  evidence high');
     expect(text).toContain('ok pass');

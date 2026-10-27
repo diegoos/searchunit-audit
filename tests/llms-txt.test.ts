@@ -185,14 +185,14 @@ describe('issuesForNonPresentLlms', () => {
         redirectChain: [],
         responseTimeMs: 1,
       }),
-    ).toEqual(['llms.txt returned status 403']);
+    ).toEqual([{ code: 'http_status', line: null, text: '403' }]);
     expect(
       issuesForNonPresentLlms('error', {
         ok: false,
         requestedUrl: 'https://example.com/llms.txt',
         error: 'timeout',
       }),
-    ).toEqual(['timeout']);
+    ).toEqual([{ code: 'timeout', line: null, text: null }]);
   });
 });
 

@@ -5,11 +5,13 @@ import type { StructuredDataSummary } from './structuredData.ts';
 export interface PageDates {
   published: string | null;
   modified: string | null;
+  visible: string | null;
 }
 
 export interface PageAuthor {
   hasAuthor: boolean;
   names: string[];
+  urls: string[];
 }
 
 export type MetaRobotsByBot = Record<string, string>;
@@ -45,11 +47,26 @@ function collectDatesFromJsonLd(
   }
 }
 
+const CONTENT_TIME = 'main time, [role="main"] time, article time';
+
+/** First `<time>` in main content, else the first `<time>` on the page. Sidebar dates lose to article dates. */
+function visibleDate($: cheerio.CheerioAPI): string | null {
+  const inContent = $(CONTENT_TIME);
+  const times = inContent.length > 0 ? inContent : $('time');
+
+  return (
+    times.filter('[datetime]').first().attr('datetime')?.trim() ||
+    times.first().text().trim() ||
+    null
+  );
+}
+
 /** Reads published/modified dates from meta tags then falls back to JSON-LD datePublished/dateModified. */
 export function extractDates($: cheerio.CheerioAPI, jsonLdBlocks?: unknown[]): PageDates {
   const dates = {
     published: $('meta[property="article:published_time"]').attr('content')?.trim() || null,
     modified: $('meta[property="article:modified_time"]').attr('content')?.trim() || null,
+    visible: visibleDate($),
   };
   for (const parsed of jsonLdBlocks ?? []) {
     try {
@@ -60,6 +77,35 @@ export function extractDates($: cheerio.CheerioAPI, jsonLdBlocks?: unknown[]): P
   }
 
   return dates;
+}
+
+function collectAuthorUrls(author: unknown, urls: Set<string>): void {
+  if (!author) {
+    return;
+  }
+
+  if (typeof author === 'string') {
+    if (/^https?:\/\//i.test(author)) {
+      urls.add(author);
+    }
+
+    return;
+  }
+
+  if (Array.isArray(author)) {
+    for (const entry of author) {
+      collectAuthorUrls(entry, urls);
+    }
+
+    return;
+  }
+
+  if (typeof author === 'object') {
+    const record = author as { url?: unknown; '@id'?: unknown };
+
+    collectAuthorUrls(record.url, urls);
+    collectAuthorUrls(record['@id'], urls);
+  }
 }
 
 function collectAuthorNames(author: unknown, names: Set<string>): void {
@@ -93,6 +139,7 @@ export function extractAuthors(
   jsonLdBlocks?: unknown[],
 ): PageAuthor {
   const names = new Set<string>();
+  const urls = new Set<string>();
   const metaAuthor = metaContentByName($, 'author');
 
   if (metaAuthor) {
@@ -119,6 +166,7 @@ export function extractAuthors(
         const obj = node as Record<string, unknown>;
 
         collectAuthorNames(obj.author, names);
+        collectAuthorUrls(obj.author, urls);
 
         if (Array.isArray(obj['@graph'])) {
           visit(obj['@graph']);
@@ -130,7 +178,15 @@ export function extractAuthors(
     }
   }
 
+  $('a[rel~="author"], link[rel~="author"]').each((_, el) => {
+    const href = $(el).attr('href')?.trim();
+
+    if (href) {
+      urls.add(href);
+    }
+  });
   const hasAuthor =
     names.size > 0 || structured.blocks.some((b) => b.type?.toLowerCase().includes('person'));
-  return { hasAuthor, names: [...names] };
+
+  return { hasAuthor, names: [...names], urls: [...urls] };
 }

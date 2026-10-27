@@ -62,6 +62,13 @@ export const AI_CRAWLERS: AICrawler[] = [
     geoImpact: 'medium',
   },
   {
+    name: 'Claude-SearchBot',
+    userAgent: 'Claude-SearchBot',
+    category: 'assistant',
+    owner: 'Anthropic',
+    geoImpact: 'medium',
+  },
+  {
     name: 'anthropic-ai',
     userAgent: 'anthropic-ai',
     category: 'assistant',

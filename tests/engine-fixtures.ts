@@ -2,15 +2,19 @@ import { parseHtmlPage } from '../src/engine/htmlParser.ts';
 import { parseRobotsTxt } from '../src/engine/robotsTxtParser.ts';
 import { deriveLlmsTxtStatus } from '../src/engine/llmsTxtStatus.ts';
 import { deriveRedirectSignals } from '../src/engine/redirectSignals.ts';
-import { mergeRobotsDirectives } from '../src/engine/robotsDirective.ts';
+import { mergeRobotsDirectives, noindexSource } from '../src/engine/robotsDirective.ts';
 import { classifyPage } from '../src/engine/pageClassification.ts';
+import {
+  auditedBodySha256,
+  platformSignalsFor,
+  type DiscoveryBundle,
+} from '../src/engine/discovery.ts';
 import { parseRobots } from '../src/tools/robots/parseRobots.ts';
 import {
   computeAuditScores,
   scoreCitabilityTexts,
   type CriticalBlocker,
 } from '../src/engine/scoring.ts';
-import type { DiscoveryBundle } from '../src/engine/discovery.ts';
 
 export function collectCriticalBlockers(bundle: DiscoveryBundle): CriticalBlocker[] {
   const blockers: CriticalBlocker[] = [];
@@ -60,7 +64,7 @@ export const PAGE_HTML = `<!doctype html>
 export function bundleFromHtml(html: string): DiscoveryBundle {
   const url = 'https://example.com/';
   const parsed = parseHtmlPage(html, url);
-  const { siteType, pageKind } = classifyPage(parsed);
+  const { siteType, pageKind } = classifyPage(parsed, url);
   const headers = {
     'content-type': 'text/html',
     'strict-transport-security': 'max-age=31536000',
@@ -81,12 +85,16 @@ export function bundleFromHtml(html: string): DiscoveryBundle {
     url: 'https://example.com/llms.txt',
     exists: false,
     fetchStatus: 'missing' as const,
+    fetchError: null,
     format_valid: false,
     has_title: false,
     has_sections: false,
     has_links: false,
     section_count: 0,
     link_count: 0,
+    links: [],
+    linksTruncated: false,
+    linksToAuditedUrl: false,
     issues: [],
     content: null,
     full_content: null,
@@ -97,6 +105,19 @@ export function bundleFromHtml(html: string): DiscoveryBundle {
   return {
     domain: 'example.com',
     auditedUrl: url,
+    auditScope: {
+      level: 'page' as const,
+      pagesScored: 1 as const,
+      contextFetches: {
+        robots: true,
+        sitemapFiles: 1,
+        llmsTxt: true,
+        crux: false,
+        mobilePage: true,
+        linksProbed: 0,
+      },
+    },
+    fetchedAt: '2026-10-01T00:00:00.000Z',
     pageKind,
     siteType,
     technicalUrls: [url],
@@ -111,22 +132,19 @@ export function bundleFromHtml(html: string): DiscoveryBundle {
       url_count: 1,
       audited_url_listed: true,
       audited_url_lastmod: null,
+      urls: [{ loc: url, lastmod: null }],
+      urlsTruncated: false,
+      coverage: 'complete' as const,
+      filesRead: 1,
     },
     redirects: deriveRedirectSignals(url, url, [url]),
 
-    platform_signals: {
-      question_heading_count: parsed.contentSignals.question_heading_count,
-      faq_pattern: parsed.contentSignals.hasFaqPattern,
-      table_count: parsed.contentSignals.tables,
-      list_count: parsed.contentSignals.lists,
-      statistic_snippet_count: parsed.contentSignals.statistic_snippet_count,
-      visible_dates: Boolean(parsed.dates.published || parsed.dates.modified),
-      has_author: parsed.author.hasAuthor,
-    },
+    platform_signals: platformSignalsFor(parsed),
     auditedPage: {
       url,
       statusCode: 200,
       byteLength: html.length,
+      bodySha256: auditedBodySha256(html),
       redirectCount: 0,
       title: parsed.title,
       metaDescription: parsed.metaDescription,
@@ -135,13 +153,38 @@ export function bundleFromHtml(html: string): DiscoveryBundle {
       effectiveRobotsDirective: mergeRobotsDirectives(parsed.robotsDirective, null),
       lang: parsed.lang,
       robotsStatus: 'present',
+      robotsFetchError: null,
       sitemapStatus: 'present',
       internalLinks: parsed.internalLinks,
+      internalLinkCount: parsed.internalLinkCount,
+      internalLinksTruncated: parsed.internalLinksTruncated,
+      outboundLinks: parsed.outboundLinks,
+      outboundLinksTruncated: parsed.outboundLinksTruncated,
+      snippetDirectives: parsed.snippetDirectives,
+      internalLinkIndex: parsed.internalLinkIndex,
+      internalLinkIndexTruncated: parsed.internalLinkIndexTruncated,
       wordCount: parsed.wordCount,
+      bodyWordCount: parsed.bodyWordCount,
+      mainText: parsed.mainText,
+      mainTextTruncated: false,
+      tables: parsed.tables,
+      mixedContent: parsed.mixedContent,
+      hiddenText: parsed.hiddenText,
+      charset: parsed.charset,
+      trustPages: parsed.trustPages,
+      externalResources: parsed.externalResources,
       structuredData: parsed.structuredData,
       headings: parsed.headings,
       viewport: parsed.viewport,
       hreflang: parsed.hreflang,
+      hreflangLinks: parsed.hreflangLinks,
+      headerCanonical: null,
+      headerHreflang: [],
+      robotsNoindexSource: noindexSource(parsed.robotsDirective, null, parsed.metaRobotsByBot),
+      pagination: parsed.pagination,
+      breadcrumbParent: parsed.breadcrumbParent,
+      visibleTextSha256: parsed.visibleTextSha256,
+      visibleTextExcerpt: parsed.visibleTextExcerpt,
       dates: parsed.dates,
       author: parsed.author,
       social: parsed.social,
@@ -150,12 +193,19 @@ export function bundleFromHtml(html: string): DiscoveryBundle {
       metaRobotsByBot: parsed.metaRobotsByBot,
       jsRenderingRisk: parsed.jsRenderingRisk,
       images: parsed.images,
+      videos: parsed.videos,
       discover: parsed.discover,
-      citability: scoreCitabilityTexts(parsed.citabilityTexts),
+      citability: {
+        ...scoreCitabilityTexts(parsed.citabilityTexts),
+        opening: parsed.citabilityOpening,
+      },
       hasSpeakable: parsed.hasSpeakable,
       pageKind,
       siteType,
     },
+    mobilePage: null,
+    mobileFetchError: null,
+    linkStatus: { status: 'skipped' as const, checked: 0, candidates: 0, results: [] },
     pagesSampled: 1,
 
     pageHeaders: headers,

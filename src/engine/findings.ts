@@ -17,8 +17,16 @@ import { parseSecurityHeaders } from '../tools/security/parseSecurityHeaders.ts'
 import { AI_CRAWLERS } from '../tools/robots/aiCrawlers';
 import type { DiscoveryBundle } from './discovery.ts';
 import { CITABILITY_IDEAL_MAX_WORDS, CITABILITY_IDEAL_MIN_WORDS } from './citabilityBlocks.ts';
-import type { CriticalBlocker } from './scoring.ts';
+import { isLocalTarget, LIVE_RETRIEVAL_BOTS, type CriticalBlocker } from './scoring.ts';
+import type { ExternalResources } from './parsers/externalResources.ts';
 import type { Finding, FindingSeverity, ReportKind } from './types.ts';
+import {
+  mobileParityFinding,
+  pageContentFindings,
+  pageLinkFindings,
+  pageMetaFindings,
+  searchCrawlerFinding,
+} from './pageFindings.ts';
 
 const BLOCKER_TITLE: Record<CriticalBlocker['id'], string> = {
   noindex_or_error: 'Page is noindex or returned an error status',
@@ -52,6 +60,25 @@ function fromCheck(
 }
 
 /** Maps a discovery fact onto a finding with the `discovery:` id prefix. */
+
+/** Status plus the error code of a failed fetch, when there is one. */
+function withFetchError(status: string, error: string | null): string {
+  return error ? `${status} (${error} after retries)` : status;
+}
+
+/** Loopback targets skip the HTTPS judgment. The report says so instead of staying silent. */
+function httpsFinding(bundle: DiscoveryBundle): Finding {
+  const local = isLocalTarget(bundle.auditedPage.url);
+
+  return discoveryFinding(
+    'https',
+    'info',
+    'HTTPS',
+    local
+      ? 'local URL (loopback): HTTPS not judged, no_https not applied'
+      : 'checked on the audited URL',
+  );
+}
 
 function discoveryFinding(
   id: string,
@@ -127,20 +154,71 @@ function llmsAnalysisForBundle(bundle: DiscoveryBundle) {
   return analyzeAbsentLlmsTxt();
 }
 
+/** Third-party origins and inline block counts. Feeds the CSP writing task. */
+function externalOriginSummary(resources: ExternalResources): string {
+  const kinds: [string, string[]][] = [
+    ['scripts', resources.scripts],
+    ['stylesheets', resources.stylesheets],
+    ['frames', resources.frames],
+    ['images', resources.images],
+    ['fonts', resources.fonts],
+    ['media', resources.media],
+    ['forms', resources.forms],
+  ];
+  const external = kinds
+    .filter(([, origins]) => origins.length > 0)
+    .map(([label, origins]) => `${label} ${origins.join(' ')}`);
+  const origins = external.length > 0 ? external.join('; ') : 'none';
+
+  return `external origins: ${origins}; inline scripts ${resources.inlineScripts}; inline styles ${resources.inlineStyles}`;
+}
+
 function securityFindings(bundle: DiscoveryBundle): Finding[] {
   const headers = parseSecurityHeaders(bundle.pageHeaders);
   const ctx = buildAnalyzeContext({
     finalUrl: bundle.auditedUrl,
     status: bundle.auditedPage.statusCode,
   });
+  const originSummary = externalOriginSummary(bundle.auditedPage.externalResources);
 
-  return analyzeSecurityHeaders(headers, ctx).checks.map((check) => ({
-    id: `security:${check.id}`,
-    source: 'security-headers',
-    severity: check.status,
-    title: check.label,
-    detail: check.value?.trim() || check.detail?.trim() || 'missing',
-  }));
+  return analyzeSecurityHeaders(headers, ctx).checks.map((check) => {
+    const detail = check.value?.trim() || check.detail?.trim() || 'missing';
+    const withOrigins =
+      check.id === 'content-security-policy' && !headers.csp
+        ? `${detail}; ${originSummary}`
+        : detail;
+
+    return {
+      id: `security:${check.id}`,
+      source: 'security-headers',
+      severity: check.status,
+      title: check.label,
+      detail: withOrigins,
+    };
+  });
+}
+
+/**
+ * Sitemap presence and whether the audited page is listed. A partial walk
+ * cannot prove the page is unlisted, so that case is `info`, not `warn`.
+ */
+function sitemapFinding(sitemap: DiscoveryBundle['sitemap']): Finding {
+  if (!sitemap.present) {
+    return discoveryFinding('sitemap', 'warn', 'Sitemap', sitemap.fetchStatus);
+  }
+
+  const detail = `${sitemap.url_count} URLs in ${sitemap.filesRead} file(s), coverage=${sitemap.coverage}, audited listed=${sitemap.audited_url_listed}`;
+
+  if (sitemap.audited_url_listed) {
+    return discoveryFinding('sitemap', 'pass', 'Sitemap', detail);
+  }
+
+  return discoveryFinding(
+    'sitemap',
+    sitemap.coverage === 'complete' ? 'warn' : 'info',
+    'Sitemap',
+    detail,
+  );
 }
 
 /**
@@ -163,14 +241,7 @@ export function collectFindings(
   }
 
   const p = bundle.auditedPage;
-  let sitemapDetail = 'missing';
   let llmsSeverity: FindingSeverity = 'info';
-
-  if (bundle.sitemap.present) {
-    sitemapDetail = `${bundle.sitemap.url_count} URLs, audited listed=${bundle.sitemap.audited_url_listed}`;
-  } else if (bundle.sitemap.fetchStatus === 'error') {
-    sitemapDetail = 'error';
-  }
 
   if (bundle.llmsTxt.exists) {
     llmsSeverity = 'pass';
@@ -189,10 +260,16 @@ export function collectFindings(
       'robots',
       p.robotsStatus === 'present' ? 'pass' : 'warn',
       'robots.txt',
-      p.robotsStatus,
+      withFetchError(p.robotsStatus, p.robotsFetchError),
     ),
-    discoveryFinding('sitemap', bundle.sitemap.present ? 'pass' : 'warn', 'Sitemap', sitemapDetail),
-    discoveryFinding('llms', llmsSeverity, 'llms.txt status', bundle.llms_txt_status),
+    sitemapFinding(bundle.sitemap),
+    discoveryFinding(
+      'llms',
+      llmsSeverity,
+      'llms.txt status',
+      withFetchError(bundle.llms_txt_status, bundle.llmsTxt.fetchError),
+    ),
+    httpsFinding(bundle),
     discoveryFinding(
       'crux',
       'info',
@@ -203,10 +280,12 @@ export function collectFindings(
     ),
     discoveryFinding(
       'redirects',
-      'info',
+      bundle.redirects.chain_length > 1 ? 'warn' : 'info',
       'Redirects',
       `chain=${bundle.redirects.chain_length} http→https=${bundle.redirects.http_to_https ? 'yes' : 'no'} www_normalized=${bundle.redirects.www_normalized}`,
     ),
+    searchCrawlerFinding(bundle),
+    mobileParityFinding(bundle),
   );
 
   const schema = analyzeSchema(bundle.schemaBlocks);
@@ -232,6 +311,8 @@ export function collectFindings(
   for (const check of meta.checks) {
     findings.push(fromCheck('meta', check));
   }
+
+  findings.push(...pageMetaFindings(bundle));
 
   for (const check of robotsAnalysisForBundle(bundle).checks) {
     findings.push(fromCheck('robots', check));
@@ -296,7 +377,15 @@ export const SEO_BLOCKERS = new Set<CriticalBlocker['id']>([
 
 export const GEO_BLOCKERS = new Set<CriticalBlocker['id']>(['live_retrieval_blocked']);
 
-const SEO_DISCOVERY = new Set(['page-class', 'robots', 'sitemap', 'crux', 'redirects']);
+const SEO_DISCOVERY = new Set([
+  'page-class',
+  'robots',
+  'sitemap',
+  'crux',
+  'redirects',
+  'search-crawlers',
+  'mobile',
+]);
 const GEO_DISCOVERY = new Set(['page-class', 'llms']);
 
 const DISCOVERY_BY_KIND: Record<KindReportKind, ReadonlySet<string>> = {
@@ -374,31 +463,39 @@ function extraFinding(
 
 function seoContentExtras(bundle: DiscoveryBundle): Finding[] {
   const page = bundle.auditedPage;
-  const { h1Count } = page.headings;
+  const { h1Count, h1ElementCount } = page.headings;
   let h1: Finding;
 
   if (h1Count === 1) {
     h1 = extraFinding('content', 'h1', 'pass', 'H1', 'one H1');
+  } else if (h1ElementCount > 0 && h1Count === 0) {
+    h1 = extraFinding('content', 'h1', 'warn', 'H1', 'H1 element with no text');
   } else if (h1Count === 0) {
     h1 = extraFinding('content', 'h1', 'fail', 'H1', 'missing');
   } else {
     h1 = extraFinding('content', 'h1', 'warn', 'H1', `${h1Count} H1 elements`);
   }
 
-  const { total, missingAlt } = page.images;
+  const { total, missingAlt, decorative } = page.images;
   let images: Finding;
 
   if (total === 0) {
     images = extraFinding('content', 'image-alt', 'info', 'Image alt', 'no images');
   } else if (missingAlt === 0) {
-    images = extraFinding('content', 'image-alt', 'pass', 'Image alt', 'all have alt');
+    images = extraFinding(
+      'content',
+      'image-alt',
+      'pass',
+      'Image alt',
+      `all have alt (${decorative} decorative)`,
+    );
   } else {
     images = extraFinding(
       'content',
       'image-alt',
       'warn',
       'Image alt',
-      `${missingAlt}/${total} missing alt`,
+      `${missingAlt}/${total} missing alt (${decorative} decorative)`,
     );
   }
 
@@ -521,7 +618,7 @@ function geoCrawlerExtras(bundle: DiscoveryBundle): Finding[] {
       entry.bot,
       crawlerSeverity(entry.status),
       entry.bot,
-      `${entry.status} (${crawlerCategory(entry.bot)})`,
+      `${entry.status}${LIVE_RETRIEVAL_BOTS.has(entry.bot) ? ', live-retrieval gate' : ''} (${crawlerCategory(entry.bot)})`,
     ),
   );
 }
@@ -579,7 +676,12 @@ function geoPlatformExtras(bundle: DiscoveryBundle): Finding[] {
 /** Kind-only findings appended by geo-check, seo-check, and audit. */
 export function kindExtras(kind: KindReportKind, bundle: DiscoveryBundle): Finding[] {
   if (kind === 'seo') {
-    return [...seoContentExtras(bundle), ...seoDiscoverExtras(bundle)];
+    return [
+      ...seoContentExtras(bundle),
+      ...pageContentFindings(bundle),
+      ...pageLinkFindings(bundle),
+      ...seoDiscoverExtras(bundle),
+    ];
   }
 
   return [

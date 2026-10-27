@@ -1,4 +1,6 @@
 import { describe, expect, test } from 'bun:test';
+import { parseHtmlPage } from '../src/engine/htmlParser.ts';
+import { extractStructuredData } from '../src/engine/parsers/structuredData.ts';
 import { analyzeSchema } from '../src/tools/schema/analyzeSchema.ts';
 import { parseSchema } from '../src/tools/schema/parseSchema.ts';
 import { getRulesForType, isKnownType } from '../src/tools/schema/schemaRules.ts';
@@ -170,5 +172,65 @@ describe('analyzeSchema', () => {
     expect(analyzeSchema(blocks).blocks[0]?.checks.find((c) => c.id === 'type')?.status).toBe(
       'pass',
     );
+  });
+  test('reads price and availability from offers and keeps the root name', () => {
+    const summary = extractStructuredData(
+      [
+        {
+          index: 0,
+          raw: '{}',
+          json: {
+            name: 'Root Name',
+            '@graph': [
+              {
+                '@type': 'Product',
+                '@id': 'https://example.com/#product',
+                offers: {
+                  '@id': 'https://example.com/#offer',
+                  price: 19.5,
+                  availability: 'https://schema.org/InStock',
+                },
+              },
+            ],
+          },
+          types: ['Product'],
+        },
+      ],
+      1,
+    );
+    const block = summary.blocks[0];
+
+    expect(block?.name).toBe('Root Name');
+    expect(block?.id).toBe('https://example.com/#product');
+    expect(block?.headline).toBeNull();
+    expect(block?.price).toBe('19.5');
+    expect(block?.availability).toBe('https://schema.org/InStock');
+    expect(block?.referencedIds).toEqual(['https://example.com/#offer']);
+
+    const html = `<html><head><script type="application/ld+json">${JSON.stringify({
+      '@context': 'https://schema.org',
+      '@type': 'Product',
+      name: 'Widget',
+      '@id': 'https://example.com/#widget',
+      price: 5,
+      offers: [
+        {
+          '@type': 'Offer',
+          price: 12,
+          availability: 'InStock',
+          '@id': 'https://example.com/#offer',
+        },
+        { '@type': 'Offer', price: 99 },
+      ],
+    })}</script></head><body><p>Hi</p></body></html>`;
+    const product = parseHtmlPage(html, 'https://example.com/').structuredData.blocks.find(
+      (item) => item.type === 'Product',
+    );
+
+    expect(product?.name).toBe('Widget');
+    expect(product?.price).toBe('5');
+    expect(product?.availability).toBe('InStock');
+    expect(product?.id).toBe('https://example.com/#widget');
+    expect(product?.referencedIds).toEqual(['https://example.com/#offer']);
   });
 });

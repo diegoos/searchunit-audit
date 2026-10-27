@@ -134,4 +134,35 @@ describe('kind reports', () => {
       }
     }
   });
+  test('kind reports drop sitemap urls and llms links', () => {
+    const bundle = bundleFromHtml(PAGE_HTML);
+
+    bundle.sitemap = {
+      ...bundle.sitemap,
+      urls: [{ loc: 'https://example.com/about', lastmod: null }],
+      urlsTruncated: true,
+    };
+    bundle.llmsTxt = {
+      ...bundle.llmsTxt,
+      links: [{ title: 'About', url: 'https://example.com/about' }],
+      linksTruncated: true,
+    };
+    const audit = buildAuditReport(bundle);
+    const seo = buildKindReport(bundle, 'seo-check', 'seo');
+
+    expect(audit.discovery.sitemap.urls).toEqual([
+      { loc: 'https://example.com/about', lastmod: null },
+    ]);
+    expect(audit.discovery.sitemap.urlsTruncated).toBe(true);
+    expect(audit.discovery.llmsTxt.links).toEqual([
+      { title: 'About', url: 'https://example.com/about' },
+    ]);
+    expect(audit.discovery.llmsTxt.linksTruncated).toBe(true);
+    expect(audit.discovery.llmsTxt.content).toBeNull();
+    expect(seo.discovery.sitemap.urls).toEqual([]);
+    expect(seo.discovery.sitemap.urlsTruncated).toBe(true);
+    expect(seo.discovery.llmsTxt.links).toEqual([]);
+    expect(seo.discovery.llmsTxt.linksTruncated).toBe(true);
+    expect(seo.discovery.mobilePage).toBeNull();
+  });
 });

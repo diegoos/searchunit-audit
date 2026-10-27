@@ -57,6 +57,8 @@ export interface FetchOptions {
   headersOnly?: boolean;
   /** Body cap for this call. Defaults to the active CLI/config cap. */
   maxBytes?: number;
+  /** When set, replaces `SearchUnitCLI/<version>` on this call. */
+  userAgent?: string;
 }
 
 let activeMaxBodyBytes = DEFAULT_MAX_BODY_BYTES;
@@ -73,6 +75,13 @@ export function currentMaxBodyBytes(): number {
 
 function bodyCap(options: FetchOptions): number {
   return options.maxBytes ?? activeMaxBodyBytes;
+}
+
+function requestHeaders(options: FetchOptions): Record<string, string> {
+  return {
+    'User-Agent': options.userAgent ?? USER_AGENT,
+    Accept: 'text/html,text/plain,application/json,*/*',
+  };
 }
 
 const DEFAULT_TIMEOUT_MS = 8_000;
@@ -471,7 +480,59 @@ function collectHeaders(response: Response): Record<string, string> {
 /**
  * Fetches a public http(s) URL with SSRF checks on every redirect hop.
  */
+/** Tries per fetch: the first try plus two retries on transient failures. */
+const FETCH_ATTEMPTS = 3;
+const RETRY_DELAY_MS = 200;
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function isTransientFailure(outcome: FetchOutcome): boolean {
+  if (!outcome.ok) {
+    return outcome.error === 'network' || outcome.error === 'timeout';
+  }
+
+  return outcome.status === 429 || outcome.status >= 500;
+}
+
+/**
+ * Fetches with retries on network errors, timeouts, 429, and 5xx. Returns the
+ * last outcome and how many tries ran, so the audit can report the failure.
+ */
+export async function fetchPublicUrlWithAttempts(
+  requestedUrl: string,
+  options: FetchOptions = {},
+): Promise<{ outcome: FetchOutcome; attempts: number }> {
+  let outcome = await fetchPublicUrlOnce(requestedUrl, options);
+  let attempts = 1;
+
+  while (attempts < FETCH_ATTEMPTS && isTransientFailure(outcome)) {
+    await sleep(RETRY_DELAY_MS * attempts);
+    outcome = await fetchPublicUrlOnce(requestedUrl, options);
+    attempts++;
+  }
+
+  return { outcome, attempts };
+}
+
 export async function fetchPublicUrl(
+  requestedUrl: string,
+  options: FetchOptions = {},
+): Promise<FetchOutcome> {
+  return (await fetchPublicUrlWithAttempts(requestedUrl, options)).outcome;
+}
+
+/** Short error code for a failed outcome, such as `timeout` or `http_503`. Null when usable. */
+export function fetchErrorCode(outcome: FetchOutcome): string | null {
+  if (!outcome.ok) {
+    return outcome.error;
+  }
+
+  return outcome.status >= 400 ? `http_${outcome.status}` : null;
+}
+
+async function fetchPublicUrlOnce(
   requestedUrl: string,
   options: FetchOptions = {},
 ): Promise<FetchOutcome> {
@@ -488,10 +549,8 @@ export async function fetchPublicUrl(
   const timer = setTimeout(() => controller.abort(), options.timeoutMs ?? DEFAULT_TIMEOUT_MS);
   const startedAt = Date.now();
   const redirectChain: string[] = [parsed.href];
-  const requestHeaders = {
-    'User-Agent': USER_AGENT,
-    Accept: 'text/html,text/plain,application/json,*/*',
-  };
+  const headers = requestHeaders(options);
+
   try {
     const firstHop = await resolvePublicHop(parsed, controller.signal);
 
@@ -506,7 +565,7 @@ export async function fetchPublicUrl(
     for (let hop = 0; ; hop++) {
       response = await pinnedFetch(current.href, pinnedAddress, {
         signal: controller.signal,
-        headers: requestHeaders,
+        headers,
         redirect: 'manual',
       });
       if (!REDIRECT_STATUSES.has(response.status)) {

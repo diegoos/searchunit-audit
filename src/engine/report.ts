@@ -1,4 +1,5 @@
 import type { DiscoveryBundle } from './discovery.ts';
+import { skippedLighthouse, type LighthouseReport } from './lighthouse.ts';
 import {
   computeAuditScores,
   scoreForKind,
@@ -45,6 +46,7 @@ export interface AuditReport {
   geo: KindReportBody;
   googleProfile: GoogleProfileSummary;
   discovery: DiscoveryResult;
+  lighthouse: LighthouseReport;
 }
 
 export interface KindReport extends KindReportBody {
@@ -65,6 +67,8 @@ export function discoveryForReport(bundle: DiscoveryBundle): DiscoveryResult {
   return {
     domain: bundle.domain,
     auditedUrl: bundle.auditedUrl,
+    auditScope: bundle.auditScope,
+    fetchedAt: bundle.fetchedAt,
     pageKind: bundle.pageKind,
     siteType: bundle.siteType,
     technicalUrls: bundle.technicalUrls,
@@ -81,7 +85,26 @@ export function discoveryForReport(bundle: DiscoveryBundle): DiscoveryResult {
     redirects: bundle.redirects,
     platform_signals: bundle.platform_signals,
     auditedPage: bundle.auditedPage,
+    mobilePage: bundle.mobilePage,
+    mobileFetchError: bundle.mobileFetchError,
+    linkStatus: bundle.linkStatus,
     pagesSampled: bundle.pagesSampled,
+  };
+}
+
+function discoveryForKindReport(bundle: DiscoveryBundle): DiscoveryResult {
+  const discovery = discoveryForReport(bundle);
+
+  return {
+    ...discovery,
+    sitemap: {
+      ...discovery.sitemap,
+      urls: [],
+    },
+    llmsTxt: {
+      ...discovery.llmsTxt,
+      links: [],
+    },
   };
 }
 
@@ -146,7 +169,7 @@ export function buildAuditReport(bundle: DiscoveryBundle): AuditReport {
     ok: true,
     command: 'audit',
     url: bundle.auditedUrl,
-    fetchedAt: new Date().toISOString(),
+    fetchedAt: bundle.fetchedAt,
     cruxApiKeyAvailable: cruxApiKeyAvailable(),
     scores,
     kindScores,
@@ -172,6 +195,7 @@ export function buildAuditReport(bundle: DiscoveryBundle): AuditReport {
     }),
     googleProfile: googleProfileFromAuditedUrl(bundle.auditedUrl),
     discovery: discoveryForReport(bundle),
+    lighthouse: skippedLighthouse(bundle.auditedUrl),
   };
 }
 
@@ -198,9 +222,9 @@ export function buildKindReport(
   return {
     ok: true,
     url: bundle.auditedUrl,
-    fetchedAt: new Date().toISOString(),
+    fetchedAt: bundle.fetchedAt,
     cruxApiKeyAvailable: cruxApiKeyAvailable(),
     ...body,
-    discovery: discoveryForReport(bundle),
+    discovery: discoveryForKindReport(bundle),
   };
 }

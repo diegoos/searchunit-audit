@@ -1,7 +1,8 @@
 import { describe, expect, test } from 'bun:test';
+import { auditThresholdStatus, kindExtras, kindThresholdStatus } from '../src/engine/findings.ts';
 import { findingGroupLabel, groupFindings } from '../src/render/audit.ts';
-import { auditThresholdStatus, kindThresholdStatus } from '../src/engine/findings.ts';
 import type { Finding } from '../src/engine/types.ts';
+import { bundleFromHtml } from './engine-fixtures.ts';
 
 function finding(over: Partial<Finding>): Finding {
   return {
@@ -13,6 +14,21 @@ function finding(over: Partial<Finding>): Finding {
     ...over,
   };
 }
+
+describe('content H1', () => {
+  test('an H1 element with no text is a warning, and no H1 element is a failure', () => {
+    const empty = bundleFromHtml('<html><body><h1> </h1><p>Some words here.</p></body></html>');
+    const absent = bundleFromHtml('<html><body><p>Some words here.</p></body></html>');
+    const emptyFinding = kindExtras('seo', empty).find((item) => item.id === 'content:h1');
+    const absentFinding = kindExtras('seo', absent).find((item) => item.id === 'content:h1');
+
+    expect(empty.auditedPage.headings.h1ElementCount).toBe(1);
+    expect(empty.auditedPage.headings.h1Count).toBe(0);
+    expect(emptyFinding).toMatchObject({ severity: 'warn', detail: 'H1 element with no text' });
+    expect(absent.auditedPage.headings.h1ElementCount).toBe(0);
+    expect(absentFinding).toMatchObject({ severity: 'fail', detail: 'missing' });
+  });
+});
 
 describe('finding groups', () => {
   test('findingGroupLabel maps sources to headings', () => {

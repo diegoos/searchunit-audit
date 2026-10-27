@@ -2,6 +2,7 @@ import type { Check, CheckStatus } from '../types';
 import { scoreToCheckStatus, statusWeightedScore } from '../types';
 import type { MetaTags } from './parseMeta';
 import { hasNoindexDirective, isIndexerBot } from './robotsTokens';
+import { pageKey } from '../../lib/url';
 
 export interface MetaAnalysis {
   score: number;
@@ -52,6 +53,67 @@ function lengthDetail(value: string | undefined, min: number, max: number): stri
   return `${len} chars (ideal ${min}–${max})`;
 }
 
+/**
+ * Canonical vs the fetched page: missing is fail; another page (different
+ * `pageKey`), another host, or an `http:` canonical on an `https:` page is warn.
+ */
+function canonicalCheck(canonical: string | undefined, pageUrl: string): Check {
+  const base = { id: 'canonical', label: 'canonical', value: canonical };
+
+  if (!canonical) {
+    return { ...base, status: 'fail', detail: 'missing' };
+  }
+
+  let canonUrl: URL;
+
+  try {
+    canonUrl = new URL(canonical, pageUrl);
+  } catch {
+    return { ...base, status: 'warn', detail: `invalid: ${canonical}` };
+  }
+
+  const page = new URL(pageUrl);
+
+  if (canonUrl.hostname !== page.hostname) {
+    return { ...base, status: 'warn', detail: `other host: ${canonUrl.href}` };
+  }
+
+  if (page.protocol === 'https:' && canonUrl.protocol === 'http:') {
+    return { ...base, status: 'warn', detail: `http canonical on https page: ${canonUrl.href}` };
+  }
+
+  if (pageKey(canonUrl.href) !== pageKey(page.href)) {
+    return { ...base, status: 'warn', detail: `points to another page: ${canonUrl.href}` };
+  }
+
+  return { ...base, status: 'pass', detail: canonical };
+}
+
+/** `og:url` should name the canonical page (or the fetched page when no canonical). */
+function ogUrlCheck(tags: MetaTags, pageUrl: string): Check {
+  const base = { id: 'og_url', label: 'og_url', value: tags.ogUrl };
+
+  if (!tags.ogUrl) {
+    return { ...base, status: 'warn', detail: 'missing' };
+  }
+
+  let target = pageUrl;
+  let og: string | null = null;
+
+  try {
+    target = tags.canonical ? new URL(tags.canonical, pageUrl).href : pageUrl;
+    og = new URL(tags.ogUrl, pageUrl).href;
+  } catch {
+    return { ...base, status: 'warn', detail: `invalid: ${tags.ogUrl}` };
+  }
+
+  if (pageKey(og) !== pageKey(target)) {
+    return { ...base, status: 'warn', detail: `differs from canonical: ${og}` };
+  }
+
+  return { ...base, status: 'pass', detail: tags.ogUrl };
+}
+
 /** Scores meta tag presence and length against SEO best-practice thresholds. */
 
 // eslint-disable-next-line complexity -- one check per meta field of the same catalog
@@ -79,28 +141,7 @@ export function analyzeMeta(tags: MetaTags, pageUrl: string): MetaAnalysis {
     detail: lengthDetail(tags.description, 150, 160),
     value: tags.description,
   });
-  // Canonical
-
-  let canonicalStatus: CheckStatus = 'fail';
-
-  if (tags.canonical) {
-    try {
-      const canonUrl = new URL(tags.canonical, pageUrl);
-      const pageOrigin = new URL(pageUrl);
-
-      canonicalStatus = canonUrl.hostname === pageOrigin.hostname ? 'pass' : 'warn';
-    } catch {
-      canonicalStatus = 'warn';
-    }
-  }
-
-  checks.push({
-    id: 'canonical',
-    label: 'canonical',
-    status: canonicalStatus,
-    detail: tags.canonical ?? 'missing',
-    value: tags.canonical,
-  });
+  checks.push(canonicalCheck(tags.canonical, pageUrl));
   // Viewport
 
   const viewportOk = tags.viewport?.includes('width=device-width');
@@ -169,15 +210,7 @@ export function analyzeMeta(tags: MetaTags, pageUrl: string): MetaAnalysis {
     detail: tags.ogImage ?? 'missing',
     value: tags.ogImage,
   });
-  // OG: url
-
-  checks.push({
-    id: 'og_url',
-    label: 'og_url',
-    status: tags.ogUrl ? 'pass' : 'warn',
-    detail: tags.ogUrl ?? 'missing',
-    value: tags.ogUrl,
-  });
+  checks.push(ogUrlCheck(tags, pageUrl));
   // OG: type
 
   checks.push({

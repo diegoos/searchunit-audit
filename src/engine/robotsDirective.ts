@@ -1,16 +1,52 @@
 import { hasNoindexDirective, INDEXER_BOTS } from '../tools/meta/robotsTokens.ts';
 
+/** Joins meta robots and X-Robots-Tag tokens. A token repeated in either source appears once, first case kept. */
 export function mergeRobotsDirectives(
   metaRobots: string | null,
   xRobotsTag: string | null,
 ): string | null {
-  const parts = [metaRobots, xRobotsTag].filter((p): p is string => Boolean(p?.trim()));
+  const tokens = [metaRobots, xRobotsTag]
+    .filter((p): p is string => Boolean(p?.trim()))
+    .flatMap((p) => p.split(','))
+    .map((token) => token.trim())
+    .filter(Boolean);
+  const seen = new Set<string>();
+  const unique = tokens.filter((token) => {
+    const key = token.toLowerCase();
 
-  if (parts.length === 0) {
-    return null;
+    if (seen.has(key)) {
+      return false;
+    }
+
+    seen.add(key);
+
+    return true;
+  });
+
+  return unique.length > 0 ? unique.join(', ') : null;
+}
+
+/** Which source carries `noindex`. Meta wins over the header, then an indexer bot meta. */
+export function noindexSource(
+  metaRobots: string | null,
+  xRobotsTag: string | null,
+  metaRobotsByBot: Record<string, string> = {},
+): 'meta' | 'header' | 'bot' | null {
+  if (hasNoindexDirective(metaRobots)) {
+    return 'meta';
   }
 
-  return parts.join(', ');
+  if (hasNoindexDirective(xRobotsTag)) {
+    return 'header';
+  }
+
+  for (const [bot, content] of Object.entries(metaRobotsByBot)) {
+    if (INDEXER_BOTS.has(bot.toLowerCase()) && hasNoindexDirective(content)) {
+      return 'bot';
+    }
+  }
+
+  return null;
 }
 
 export function isNoindexCombined(

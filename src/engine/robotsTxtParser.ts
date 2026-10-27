@@ -9,10 +9,16 @@ interface CrawlerAccessEntry {
   crawl_delay_seconds: number | null;
 }
 
+export interface WildcardRules {
+  allow: string[];
+  disallow: string[];
+}
+
 export interface RobotsTxtParseResult {
   crawlers: CrawlerAccessEntry[];
   sitemaps: string[];
   raw_present: boolean;
+  wildcardRules: WildcardRules;
 }
 
 const CANONICAL_AI_CRAWLERS = [
@@ -23,6 +29,7 @@ const CANONICAL_AI_CRAWLERS = [
   'OAI-SearchBot',
   'ChatGPT-User',
   'ClaudeBot',
+  'Claude-SearchBot',
   'anthropic-ai',
   'PerplexityBot',
   'CCBot',
@@ -47,6 +54,20 @@ function resolveStatus(rules: AgentRules, requestPath: string): CrawlerAccessSta
 
 function emptyRules(): AgentRules {
   return { allow: [], disallow: [], crawl_delay: null };
+}
+
+function emptyWildcard(): WildcardRules {
+  return { allow: [], disallow: [] };
+}
+
+function wildcardFromAgents(agents: Map<string, AgentRules>): WildcardRules {
+  const star = agents.get('*');
+
+  if (!star) {
+    return emptyWildcard();
+  }
+
+  return { allow: [...star.allow], disallow: [...star.disallow] };
 }
 
 function agentKey(name: string): string {
@@ -96,7 +117,7 @@ function pickRules(agents: Map<string, AgentRules>, bot: string): AgentRules {
 
 /** Fetch/parse unknown: no crawler rows (scored as 50, not allow-all). */
 export function unknownCrawlerAccess(): RobotsTxtParseResult {
-  return { crawlers: [], sitemaps: [], raw_present: false };
+  return { crawlers: [], sitemaps: [], raw_present: false, wildcardRules: emptyWildcard() };
 }
 
 export function crawlerAccessFromParsed(
@@ -114,7 +135,12 @@ export function crawlerAccessFromParsed(
     };
   });
 
-  return { crawlers, sitemaps, raw_present: true };
+  return {
+    crawlers,
+    sitemaps,
+    raw_present: true,
+    wildcardRules: wildcardFromAgents(agents),
+  };
 }
 
 export function parseRobotsTxt(body: string | null, requestPath = '/'): RobotsTxtParseResult {
@@ -126,8 +152,8 @@ export function parseRobotsTxt(body: string | null, requestPath = '/'): RobotsTx
         crawl_delay_seconds: null,
       })),
       sitemaps: [],
-
       raw_present: false,
+      wildcardRules: emptyWildcard(),
     };
   }
 

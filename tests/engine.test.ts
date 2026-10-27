@@ -21,8 +21,8 @@ describe('deterministic audit engine', () => {
     const bundle = bundleFromHtml(PAGE_HTML);
     const scores = computeAuditScores(bundle);
 
-    expect(scores.overall).toBe(67);
-    expect(scores.label).toBe('Moderate');
+    expect(scores.overall).toBe(54);
+    expect(scores.label).toBe('Below Average');
     expect(scores.confidence).toBe('low');
     expect(scores.evidence_quality).toBeDefined();
     expect(scores.breakdown).toHaveLength(5);
@@ -109,7 +109,7 @@ describe('deterministic audit engine', () => {
 
     expect(tech?.evidence_type).toBe('insufficient');
   });
-  test('does not credit a robots Sitemap that failed to fetch', () => {
+  test('technical foundations is N/A without field CWV, so a failed Sitemap cannot move it', () => {
     const fetched = bundleFromHtml(PAGE_HTML);
     const failed = bundleFromHtml(PAGE_HTML);
 
@@ -119,6 +119,10 @@ describe('deterministic audit engine', () => {
       url_count: 0,
       audited_url_listed: false,
       audited_url_lastmod: null,
+      urls: [],
+      urlsTruncated: false,
+      coverage: 'complete',
+      filesRead: 0,
     };
     failed.auditedPage.sitemapStatus = 'error';
     const fetchedTech = computeAuditScores(fetched).breakdown.find(
@@ -130,7 +134,8 @@ describe('deterministic audit engine', () => {
 
     expect(fetched.crawlerAccess.sitemaps.length).toBeGreaterThan(0);
     expect(failed.crawlerAccess.sitemaps.length).toBeGreaterThan(0);
-    expect(failedTech?.score).toBeLessThan(fetchedTech?.score ?? 0);
+    expect(fetchedTech?.score).toBeNull();
+    expect(failedTech?.score).toBeNull();
   });
   test('googlebot meta noindex emits noindex_or_error', () => {
     const html = PAGE_HTML.replace('</head>', '<meta name="googlebot" content="noindex"/></head>');
@@ -246,7 +251,7 @@ describe('deterministic audit engine', () => {
 
     bundle.llmsTxt.exists = false;
     bundle.llmsTxt.fetchStatus = 'error';
-    bundle.llmsTxt.issues = ['llms.txt returned status 403'];
+    bundle.llmsTxt.issues = [{ code: 'http_status', line: null, text: '403' }];
     bundle.llms_txt_status = deriveLlmsTxtStatus(bundle.llmsTxt);
     const findings = collectFindings(bundle, []);
     const presence = findings.find((f) => f.id === 'llms:presence');
@@ -266,6 +271,10 @@ describe('deterministic audit engine', () => {
       url_count: 0,
       audited_url_listed: false,
       audited_url_lastmod: null,
+      urls: [],
+      urlsTruncated: false,
+      coverage: 'complete',
+      filesRead: 0,
     };
     bundle.auditedPage.sitemapStatus = 'error';
     const findings = collectFindings(bundle, []);
@@ -278,8 +287,8 @@ describe('deterministic audit engine', () => {
     const report = buildAuditReport(bundleFromHtml(PAGE_HTML));
     const table = renderAudit(report, 'table');
 
-    expect(table).toContain('Site Audit');
-    expect(table).toMatch(/Site Audit[^\n]*\n\nhttps:\/\/example.com\//);
+    expect(table).toContain('Page Audit');
+    expect(table).toMatch(/Page Audit[^\n]*\n\nhttps:\/\/example.com\//);
     expect(table).toContain('Component');
     expect(table).toContain('Score');
     expect(table).toContain(String(report.scores.overall));
@@ -329,7 +338,7 @@ describe('deterministic audit engine', () => {
     const html = renderAudit(report, 'html');
 
     expect(html).toContain('<table>');
-    expect(html).toContain('Site Audit');
+    expect(html).toContain('Page Audit');
 
     const md = renderAudit(report, 'markdown');
 
@@ -383,7 +392,7 @@ describe('deterministic audit engine', () => {
     const parsed = parseHtmlPage(html, url);
 
     expect(parsed.contentSignals.listingPattern).toBe(true);
-    expect(classifyPage(parsed).pageKind).toBe('article');
+    expect(classifyPage(parsed, 'https://example.com/page').pageKind).toBe('article');
   });
   test('title KPI follows the meta-check length status', () => {
     const html = PAGE_HTML.replace(

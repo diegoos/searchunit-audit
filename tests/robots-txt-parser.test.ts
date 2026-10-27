@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test';
-import { parseRobotsTxt } from '../src/engine/robotsTxtParser.ts';
+import { parseRobotsTxt, unknownCrawlerAccess } from '../src/engine/robotsTxtParser.ts';
 
 describe('parseRobotsTxt', () => {
   test('treats a missing body as all crawlers allowed', () => {
@@ -44,5 +44,27 @@ describe('parseRobotsTxt', () => {
     const parsed = parseRobotsTxt('User-agent: *\nDisallow:\n', '/');
 
     expect(parsed.crawlers.every((crawler) => crawler.status === 'allowed')).toBe(true);
+  });
+  test('copies User-agent * allow and disallow and drops crawl-delay', () => {
+    const parsed = parseRobotsTxt(
+      'User-agent: *\nAllow: /public\nDisallow: /admin\nCrawl-delay: 10\n',
+    );
+
+    expect(parsed.wildcardRules).toEqual({ allow: ['/public'], disallow: ['/admin'] });
+  });
+  test('empty bodies, missing star groups, and unknown access have empty wildcard rules', () => {
+    expect(parseRobotsTxt(null).wildcardRules).toEqual({ allow: [], disallow: [] });
+    expect(parseRobotsTxt('   ').wildcardRules).toEqual({ allow: [], disallow: [] });
+    expect(parseRobotsTxt('User-agent: Googlebot\nDisallow: /\n').wildcardRules).toEqual({
+      allow: [],
+      disallow: [],
+    });
+    expect(unknownCrawlerAccess().wildcardRules).toEqual({ allow: [], disallow: [] });
+  });
+  test('lists Claude-SearchBot next to ClaudeBot', () => {
+    const bots = parseRobotsTxt(null).crawlers.map((crawler) => crawler.bot);
+    const claude = bots.indexOf('ClaudeBot');
+
+    expect(bots[claude + 1]).toBe('Claude-SearchBot');
   });
 });

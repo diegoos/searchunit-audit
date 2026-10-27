@@ -1,4 +1,5 @@
-import type * as cheerio from 'cheerio';
+import type { MainContent } from './parsers/mainContent.ts';
+import { summaryParagraph } from './parsers/contentSignals.ts';
 
 export const CITABILITY_IDEAL_MIN_WORDS = 134;
 export const CITABILITY_IDEAL_MAX_WORDS = 167;
@@ -13,6 +14,7 @@ export interface CitabilityDimensions {
 }
 
 export interface CitabilityBlockScore {
+  text: string;
   text_preview: string;
   word_count: number;
   score: number;
@@ -23,6 +25,11 @@ export interface CitabilityBlockScore {
 
 export interface CitabilitySummary {
   blocks: CitabilityBlockScore[];
+  /** Lowest-scoring blocks that are not already in `blocks`, at most 12. */
+  weakBlocks: CitabilityBlockScore[];
+  blocksTruncated: boolean;
+  /** First paragraph on the page, including a short opening the score skips. */
+  opening: string | null;
   page_score: number;
   citation_ready_blocks: number;
   ideal_range_blocks: number;
@@ -35,23 +42,21 @@ export function citabilityWordCount(text: string): number {
 }
 
 /** Candidate answer blocks (word counts only; scores live in scoring.ts). */
-export function extractCitabilityTexts($: cheerio.CheerioAPI): string[] {
-  const candidates: string[] = [];
+export function extractCitabilityTexts(content: MainContent): string[] {
+  return [
+    ...content.paragraphs.filter((text) => citabilityWordCount(text) >= 25),
+    ...content.listItems.filter((text) => citabilityWordCount(text) >= 30),
+  ];
+}
 
-  $('main p, article p, [role="main"] p, body > p').each((_, el) => {
-    const t = $(el).text().replace(/\s+/g, ' ').trim();
+const OPENING_CAP = 600;
 
-    if (citabilityWordCount(t) >= 25) {
-      candidates.push(t);
-    }
-  });
-  $('main li, article li, [role="main"] li').each((_, el) => {
-    const t = $(el).text().replace(/\s+/g, ' ').trim();
+/**
+ * First main-content paragraph after any leading byline or date, even when it is too
+ * short to score. A byline is not an answer.
+ */
+export function extractCitabilityOpening(content: MainContent): string | null {
+  const opening = summaryParagraph(content.paragraphs);
 
-    if (citabilityWordCount(t) >= 30) {
-      candidates.push(t);
-    }
-  });
-
-  return candidates.slice(0, 24);
+  return opening ? opening.slice(0, OPENING_CAP) : null;
 }

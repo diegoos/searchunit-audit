@@ -90,7 +90,7 @@ export function groupFindings(
 }
 
 function scoreCell(score: number | null): string {
-  return score === null ? '—' : String(score);
+  return score === null ? 'N/A' : String(score);
 }
 
 /** Title KPI follows meta-check length status when that finding exists. */
@@ -249,7 +249,7 @@ function renderTable(report: AuditReport): string {
   const seo = report.seo.scores.overall;
   const geo = report.geo.scores.overall;
   const header = formatReportHeader({
-    title: 'Site Audit',
+    title: 'Page Audit',
     url: report.url,
     score: overall,
     label: paintScore(overall, report.scores.label),
@@ -370,7 +370,7 @@ function renderHtml(report: AuditReport): string {
   return htmlShell(
     'audit',
     report.url,
-    `  <h1>Site Audit</h1>
+    `  <h1>Page Audit</h1>
   <p>${escapeHtml(report.url)}</p>
   <p>Overall ${report.scores.overall} — ${escapeHtml(report.scores.label)} (confidence ${escapeHtml(report.scores.confidence)})</p>
   <p>${escapeHtml(cruxApiKeyLabel(report.cruxApiKeyAvailable))}</p>
@@ -440,7 +440,7 @@ function markdownGoogleProfile(profile: GoogleProfileSummary): string[] {
 /** Renders a Markdown report with overall scores, then SEO, GEO, and Google Profile. */
 function renderMarkdown(report: AuditReport): string {
   return [
-    `# Site Audit`,
+    `# Page Audit`,
     '',
     escapeMarkdown(report.url),
     '',

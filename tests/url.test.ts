@@ -1,5 +1,12 @@
 import { describe, expect, test } from 'bun:test';
-import { isValidHttpUrl, normalizeUrl, requireHttpUrl, stripUserinfo } from '../src/lib/url.ts';
+import {
+  isValidHttpUrl,
+  normalizeUrl,
+  pageKey,
+  parseLinkHeader,
+  requireHttpUrl,
+  stripUserinfo,
+} from '../src/lib/url.ts';
 
 describe('normalizeUrl', () => {
   test('prepends https when the scheme is missing', () => {
@@ -36,6 +43,38 @@ describe('stripUserinfo', () => {
     expect(url.username).toBe('');
     expect(url.password).toBe('');
     expect(url.href).toBe('https://example.com/path');
+  });
+});
+
+describe('pageKey', () => {
+  test('keeps a non-default port and drops the scheme default', () => {
+    expect(pageKey('http://localhost:8765/page.html')).toBe('localhost:8765/page.html');
+    expect(pageKey('http://localhost:3000/page.html')).toBe('localhost:3000/page.html');
+    expect(pageKey('https://example.com:443/a')).toBe('example.com/a');
+    expect(pageKey('http://example.com:80/a')).toBe('example.com/a');
+  });
+  test('drops www, a trailing slash, and tracking params', () => {
+    expect(pageKey('https://www.example.com/a/?utm_source=x&gclid=1&fbclid=2')).toBe(
+      'example.com/a',
+    );
+  });
+  test('keeps a query that changes the document', () => {
+    expect(pageKey('https://example.com/a?id=1&utm_campaign=spring')).toBe('example.com/a?id=1');
+    expect(pageKey('https://example.com/a?b=2&id=1')).toBe('example.com/a?b=2&id=1');
+  });
+});
+
+describe('parseLinkHeader', () => {
+  test('reads canonical and hreflang', () => {
+    expect(
+      parseLinkHeader(
+        '<https://example.com/a>; rel="canonical", <https://example.com/pt>; rel="alternate"; hreflang="pt"',
+        'https://example.com/',
+      ),
+    ).toEqual({
+      canonical: 'https://example.com/a',
+      hreflang: [{ lang: 'pt', href: 'https://example.com/pt' }],
+    });
   });
 });
 

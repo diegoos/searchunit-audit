@@ -13,6 +13,7 @@ export interface MetaTags {
   ogImage?: string;
   ogUrl?: string;
   ogType?: string;
+  ogLocale?: string;
   ogSiteName?: string;
   // Twitter / X
   twitterCard?: string;
@@ -27,10 +28,6 @@ function firstAttr($: cheerio.CheerioAPI, selector: string, attribute: string): 
   const value = $(selector).first().attr(attribute)?.trim();
 
   return value || undefined;
-}
-
-function firstContent($: cheerio.CheerioAPI, selector: string): string | undefined {
-  return firstAttr($, selector, 'content');
 }
 
 /** First link[rel] href; HTML rel is case-insensitive and may be a token list. */
@@ -74,18 +71,37 @@ export function metaContentByName($: cheerio.CheerioAPI, name: string): string |
 }
 
 const BOT_META_NAMES = ['googlebot', 'bingbot', 'gptbot', 'google-extended', 'oai-searchbot'];
+const SKIP_META_NAMES = new Set([
+  'description',
+  'viewport',
+  'author',
+  'keywords',
+  'theme-color',
+  'color-scheme',
+  'referrer',
+  'format-detection',
+  'generator',
+  'robots',
+]);
+const ROBOTS_DIRECTIVE =
+  /(?:^|[\s,])(?:noindex|nofollow|none|nosnippet|noarchive|max-snippet|max-image-preview|unavailable_after)(?::|\s|,|$)/i;
 
-/** Per-bot robots metas (name match is case-insensitive). */
+/** Per-bot robots metas, plus any other meta name that carries a robots token. */
 function extractBotMetaRobots($: cheerio.CheerioAPI): Record<string, string> {
   const out: Record<string, string> = {};
 
-  for (const bot of BOT_META_NAMES) {
-    const content = metaContentByName($, bot);
+  $('meta[name]').each((_, el) => {
+    const name = $(el).attr('name')?.trim().toLowerCase();
+    const content = $(el).attr('content')?.trim();
 
-    if (content) {
-      out[bot] = content;
+    if (!name || !content || SKIP_META_NAMES.has(name)) {
+      return;
     }
-  }
+
+    if (BOT_META_NAMES.includes(name) || ROBOTS_DIRECTIVE.test(content)) {
+      out[name] = content;
+    }
+  });
 
   return out;
 }
@@ -97,17 +113,17 @@ export function parseMetaFromDom($: cheerio.CheerioAPI): MetaTags {
 
   return {
     title: title || undefined,
-    description:
-      metaContentByName($, 'description') ?? firstContent($, 'meta[property="og:description"]'),
+    description: metaContentByName($, 'description'),
     canonical: linkHrefByRel($, 'canonical'),
     robotsMeta: metaContentByName($, 'robots'),
     viewport: metaContentByName($, 'viewport'),
-    lang: lang || firstAttr($, 'meta[property="og:locale"]', 'content'),
+    lang: lang || undefined,
     ogTitle: firstAttr($, 'meta[property="og:title"]', 'content'),
     ogDescription: firstAttr($, 'meta[property="og:description"]', 'content'),
     ogImage: firstAttr($, 'meta[property="og:image"]', 'content'),
     ogUrl: firstAttr($, 'meta[property="og:url"]', 'content'),
     ogType: firstAttr($, 'meta[property="og:type"]', 'content'),
+    ogLocale: firstAttr($, 'meta[property="og:locale"]', 'content'),
     ogSiteName: firstAttr($, 'meta[property="og:site_name"]', 'content'),
     twitterCard: metaContentByName($, 'twitter:card'),
     twitterTitle: metaContentByName($, 'twitter:title'),

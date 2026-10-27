@@ -1,12 +1,29 @@
 import * as cheerio from 'cheerio';
-import { getRulesForType, schemaTypeName } from '../../tools/schema/schemaRules.ts';
+import {
+  getRulesForType,
+  schemaTypeName,
+  type SchemaRuleSet,
+} from '../../tools/schema/schemaRules.ts';
 import type { ParsedSchemaBlock } from '../../tools/schema/parseSchema.ts';
 
 interface StructuredDataBlock {
   type: string | null;
   name: string | null;
   hasRequiredProps: boolean;
+  missingProps: string[];
+  /** Recommended schema.org props the block lacks. Does not affect `hasRequiredProps`. */
+  recommendedMissing: string[];
   sameAs: string[];
+  id: string | null;
+  headline: string | null;
+  price: string | null;
+  availability: string | null;
+  referencedIds: string[];
+}
+
+export interface FaqPair {
+  question: string;
+  answer: string;
 }
 
 export interface StructuredDataSummary {
@@ -16,13 +33,16 @@ export interface StructuredDataSummary {
   blocks: StructuredDataBlock[];
   hasGraph: boolean;
   missingTypeCount: number;
+  faqPairs: FaqPair[];
 }
 
 export interface MarkupFormats {
   has_microdata: boolean;
   microdata_item_count: number;
+  microdata_types: string[];
   has_rdfa: boolean;
   rdfa_property_count: number;
+  rdfa_types: string[];
   jsonld_only: boolean;
   jsonld_blocks_missing_type: number;
 }
@@ -86,20 +106,41 @@ function collectSameAs(node: unknown, acc: Set<string>): void {
   }
 }
 
-/** Validates required props for recognized schema.org types (Organization, Article, etc). */
+/** Required property names missing on both the typed node and the script root. */
 
-function validateRequiredProps(type: string | null, obj: Record<string, unknown>): boolean {
-  if (!type) {
-    return false;
-  }
-
+function missingRuleProps(
+  type: string,
+  source: Record<string, unknown>,
+  root: Record<string, unknown>,
+  select: (rules: SchemaRuleSet) => string[],
+): string[] {
   const rules = getRulesForType(schemaTypeName(type));
 
   if (!rules) {
-    return true;
+    return [];
   }
 
-  return rules.required.every((prop) => hasProp(obj, prop));
+  return select(rules).filter((prop) => !hasProp(source, prop) && !hasProp(root, prop));
+}
+
+function missingRequiredProps(
+  type: string | null,
+  source: Record<string, unknown>,
+  root: Record<string, unknown>,
+): string[] {
+  if (!type) {
+    return ['@type'];
+  }
+
+  return missingRuleProps(type, source, root, (rules) => rules.required);
+}
+
+function missingRecommendedProps(
+  type: string,
+  source: Record<string, unknown>,
+  root: Record<string, unknown>,
+): string[] {
+  return missingRuleProps(type, source, root, (rules) => rules.recommended);
 }
 
 /** Collects `@type` on this node and `@graph` items only (not nested properties). */
@@ -162,6 +203,139 @@ function nodeHasSpeakableType(node: unknown): boolean {
   });
 }
 
+function asRecord(value: unknown): Record<string, unknown> | null {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    return null;
+  }
+
+  return value as Record<string, unknown>;
+}
+
+function stringOrNull(value: unknown): string | null {
+  return typeof value === 'string' ? value : null;
+}
+
+function decimalString(value: unknown): string | null {
+  if (typeof value === 'number' && Number.isFinite(value)) {
+    return String(value);
+  }
+
+  if (typeof value === 'string') {
+    return value;
+  }
+
+  return null;
+}
+
+function typeIncludes(node: Record<string, unknown>, type: string): boolean {
+  const expected = schemaTypeName(type);
+
+  return typeNames(node['@type']).some((name) => schemaTypeName(name) === expected);
+}
+
+function nodeForBlockType(root: Record<string, unknown>, type: string): Record<string, unknown> {
+  if (typeIncludes(root, type)) {
+    return root;
+  }
+
+  const graph = root['@graph'];
+
+  if (!Array.isArray(graph)) {
+    return root;
+  }
+
+  for (const item of graph) {
+    const record = asRecord(item);
+
+    if (record && typeIncludes(record, type)) {
+      return record;
+    }
+  }
+
+  return root;
+}
+
+function firstOffer(value: unknown): Record<string, unknown> | null {
+  if (Array.isArray(value)) {
+    for (const item of value) {
+      const record = asRecord(item);
+
+      if (record) {
+        return record;
+      }
+    }
+
+    return null;
+  }
+
+  return asRecord(value);
+}
+
+function offerField(node: Record<string, unknown>, key: 'price' | 'availability'): string | null {
+  const direct = decimalString(node[key]);
+
+  if (direct !== null) {
+    return direct;
+  }
+
+  const offer = firstOffer(node.offers);
+
+  if (!offer) {
+    return null;
+  }
+
+  return decimalString(offer[key]);
+}
+
+function collectReferencedIds(node: Record<string, unknown>): string[] {
+  const ids: string[] = [];
+
+  const walk = (value: unknown): void => {
+    if (Array.isArray(value)) {
+      for (const item of value) {
+        walk(item);
+      }
+
+      return;
+    }
+
+    const record = asRecord(value);
+
+    if (!record) {
+      return;
+    }
+
+    for (const [key, child] of Object.entries(record)) {
+      if (key === '@id' && typeof child === 'string') {
+        ids.push(child);
+      }
+
+      walk(child);
+    }
+  };
+  for (const [key, child] of Object.entries(node)) {
+    if (key === '@id') {
+      continue;
+    }
+
+    walk(child);
+  }
+
+  return ids;
+}
+
+function schemaBlockFacts(
+  node: Record<string, unknown>,
+): Pick<StructuredDataBlock, 'id' | 'headline' | 'price' | 'availability' | 'referencedIds'> {
+  return {
+    id: stringOrNull(node['@id']),
+    headline: stringOrNull(node.headline),
+    price: offerField(node, 'price'),
+    availability: offerField(node, 'availability'),
+    referencedIds: collectReferencedIds(node),
+  };
+}
+
 /** Builds a structured data summary from expanded schema-check nodes. */
 export function extractStructuredData(
   schemaBlocks: readonly ParsedSchemaBlock[],
@@ -197,11 +371,17 @@ export function extractStructuredData(
     collectSameAs(obj, sameAs);
 
     for (const type of block.types) {
+      const source = nodeForBlockType(asRecord(block.json) ?? obj, type);
+      const missingProps = missingRequiredProps(type, source, obj);
+
       blocks.push({
         type,
         name: typeof obj.name === 'string' ? obj.name.trim() : null,
-        hasRequiredProps: validateRequiredProps(type, obj),
+        hasRequiredProps: missingProps.length === 0,
+        missingProps,
+        recommendedMissing: missingRecommendedProps(type, source, obj),
         sameAs: [...sameAs],
+        ...schemaBlockFacts(source),
       });
     }
   }
@@ -213,7 +393,58 @@ export function extractStructuredData(
     blocks,
     hasGraph,
     missingTypeCount,
+    faqPairs: faqPairsFrom(schemaBlocks.map((block) => block.json)),
   };
+}
+
+const FAQ_PAIR_CAP = 12;
+
+function faqPairsFrom(nodes: unknown[]): FaqPair[] {
+  const pairs: FaqPair[] = [];
+  const seen = new Set<unknown>();
+
+  const visit = (node: unknown): void => {
+    if (pairs.length >= FAQ_PAIR_CAP || node === null || node === undefined || seen.has(node)) {
+      return;
+    }
+
+    if (typeof node === 'object') {
+      seen.add(node);
+    }
+
+    if (Array.isArray(node)) {
+      for (const item of node) {
+        visit(item);
+      }
+
+      return;
+    }
+
+    const record = asRecord(node);
+
+    if (!record) {
+      return;
+    }
+
+    const question = stringOrNull(record.name)?.trim();
+    const accepted = Array.isArray(record.acceptedAnswer)
+      ? asRecord(record.acceptedAnswer[0])
+      : asRecord(record.acceptedAnswer);
+    const answer = accepted ? stringOrNull(accepted.text)?.trim() : null;
+    const isQuestion = typeNames(record['@type']).some(
+      (name) => schemaTypeName(name).toLowerCase() === 'question',
+    );
+
+    if (isQuestion && question && answer) {
+      pairs.push({ question, answer: answer.slice(0, 500) });
+    }
+
+    visit(record.mainEntity);
+    visit(record['@graph']);
+  };
+  visit(nodes);
+
+  return pairs;
 }
 
 const NON_SCHEMA_META_PROPERTY_PREFIX = /^(og|fb|twitter):/i;
@@ -321,11 +552,60 @@ export function extractMarkupFormats(
   return {
     has_microdata,
     microdata_item_count,
+    microdata_types: microdataTypes($),
     has_rdfa,
     rdfa_property_count,
+    rdfa_types: rdfaTypes($),
     jsonld_only: structured.jsonld_blocks > 0 && !has_microdata && !has_rdfa,
     jsonld_blocks_missing_type: structured.missingTypeCount,
   };
+}
+
+const MARKUP_TYPE_CAP = 20;
+
+function pushMarkupType(types: string[], raw: string): void {
+  for (const part of raw.split(/\s+/)) {
+    const name = schemaTypeName(part);
+
+    if (!name || types.includes(name) || types.length >= MARKUP_TYPE_CAP) {
+      continue;
+    }
+
+    types.push(name);
+  }
+}
+
+function microdataTypes($: cheerio.CheerioAPI): string[] {
+  const types: string[] = [];
+
+  $('[itemtype]').each((_, el) => {
+    const itemtype = $(el).attr('itemtype')?.trim();
+
+    if (itemtype && isSchemaOrgUri(itemtype)) {
+      pushMarkupType(types, itemtype);
+    }
+  });
+
+  return types;
+}
+
+function rdfaTypes($: cheerio.CheerioAPI): string[] {
+  const types: string[] = [];
+  const vocabScope = hasSchemaOrgVocabScope($);
+
+  $('[typeof]').each((_, el) => {
+    const value = $(el).attr('typeof')?.trim();
+
+    if (!value || NON_SCHEMA_META_PROPERTY_PREFIX.test(value)) {
+      return;
+    }
+
+    if (isSchemaOrgUri(value) || vocabScope) {
+      pushMarkupType(types, value);
+    }
+  });
+
+  return types;
 }
 
 function isSpeakableType(type: string | null | undefined): boolean {
