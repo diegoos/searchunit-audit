@@ -98,7 +98,6 @@ function takeValue(argv: string[], i: number, flag: string): { value: string; ne
 }
 
 /** Consumes `--flag value` or `--flag=value` when `argv[i]` matches. */
-
 function takeNamed(
   argv: string[],
   i: number,
@@ -154,9 +153,6 @@ export function parseOutFormat(
  * Splits `bun src/index.ts <command> [target] [flags…]` into a structured
  * command, optional URL/domain, and flags.
  */
-
-// Flag parsers are a linear switch of options; splitting hides the argv contract.
-// eslint-disable-next-line complexity
 export function parseCli(argv: string[], defaults?: ParseCliDefaults): ParsedCli {
   const flags: CliFlags = {
     json: false,
@@ -171,102 +167,21 @@ export function parseCli(argv: string[], defaults?: ParseCliDefaults): ParsedCli
     maxBytes: DEFAULT_MAX_BODY_BYTES,
     rest: [],
   };
+  const scan: ValueScan = { formatRaw: undefined, maxBytesRaw: undefined };
   let command: string | undefined;
   let target: string | undefined;
-  let formatRaw: string | undefined;
-  let maxBytesRaw: string | undefined;
 
   for (let i = 0; i < argv.length; i++) {
     const arg = argv[i];
 
-    if (arg === undefined) {
+    if (arg === undefined || applyBooleanFlag(arg, flags)) {
       continue;
     }
 
-    if (arg === '-h' || arg === '--help') {
-      flags.help = true;
-      continue;
-    }
+    const next = applyValueFlag(argv, i, flags, scan);
 
-    if (arg === '-V' || arg === '--version') {
-      flags.version = true;
-      continue;
-    }
-
-    if (arg === '--json') {
-      flags.json = true;
-      continue;
-    }
-
-    if (arg === '--silent') {
-      flags.silent = true;
-      continue;
-    }
-
-    if (arg === '--agent') {
-      flags.agent = true;
-      continue;
-    }
-
-    if (arg === '-g' || arg === '--global') {
-      flags.global = true;
-      continue;
-    }
-
-    if (arg === '--color' || arg === '--no-color' || arg.startsWith('--color=')) {
-      applyColorFlag(arg);
-      continue;
-    }
-
-    const outputPath = takeNamed(argv, i, '--output') ?? takeNamed(argv, i, '-o');
-
-    if (outputPath) {
-      flags.outputPath = outputPath.value.trim();
-      i = outputPath.next;
-      continue;
-    }
-
-    const format = takeNamed(argv, i, '--format') ?? takeNamed(argv, i, '-f');
-
-    if (format) {
-      formatRaw = format.value;
-      i = format.next;
-      continue;
-    }
-
-    const failOn = takeNamed(argv, i, '--fail-on');
-
-    if (failOn) {
-      if (failOn.value !== 'fail' && failOn.value !== 'warn') {
-        throw new Error('--fail-on must be "fail" or "warn"');
-      }
-
-      flags.failOn = failOn.value;
-      i = failOn.next;
-      continue;
-    }
-
-    const maxBytes = takeNamed(argv, i, '--max-bytes');
-
-    if (maxBytes) {
-      maxBytesRaw = maxBytes.value;
-      i = maxBytes.next;
-      continue;
-    }
-
-    const initDate = takeNamed(argv, i, '--init-date');
-
-    if (initDate) {
-      flags.initDate = parseGscDate(initDate.value, '--init-date');
-      i = initDate.next;
-      continue;
-    }
-
-    const endDate = takeNamed(argv, i, '--end-date');
-
-    if (endDate) {
-      flags.endDate = parseGscDate(endDate.value, '--end-date');
-      i = endDate.next;
+    if (next !== undefined) {
+      i = next;
       continue;
     }
 
@@ -274,27 +189,140 @@ export function parseCli(argv: string[], defaults?: ParseCliDefaults): ParsedCli
       throw new Error(`Unknown option: ${arg}`);
     }
 
-    if (!command) {
-      command = resolveCommand(arg);
-      continue;
-    }
-
-    if (!target) {
+    if (command && target) {
+      flags.rest.push(arg);
+    } else if (command) {
       target = arg;
-      continue;
+    } else {
+      command = resolveCommand(arg);
     }
-
-    flags.rest.push(arg);
   }
 
-  applyStdoutFormat(command, flags, formatRaw, defaults);
+  applyStdoutFormat(command, flags, scan.formatRaw, defaults);
   applyOutputPath(command, flags);
   applyGscDates(command, flags);
-  flags.maxBytes = maxBytesRaw
-    ? parseMaxBodyBytes(maxBytesRaw)
+  flags.maxBytes = scan.maxBytesRaw
+    ? parseMaxBodyBytes(scan.maxBytesRaw)
     : (defaults?.maxBytes ?? flags.maxBytes);
 
   return { command, target, flags };
+}
+
+/** Raw values of flags whose validation waits until the whole argv is read. */
+interface ValueScan {
+  formatRaw: string | undefined;
+  maxBytesRaw: string | undefined;
+}
+
+/** Applies a flag that takes no value. Returns false when `arg` is not one. */
+function applyBooleanFlag(arg: string, flags: CliFlags): boolean {
+  switch (arg) {
+    case '-h':
+    case '--help':
+      flags.help = true;
+
+      return true;
+    case '-V':
+    case '--version':
+      flags.version = true;
+
+      return true;
+    case '--json':
+      flags.json = true;
+
+      return true;
+    case '--silent':
+      flags.silent = true;
+
+      return true;
+    case '--agent':
+      flags.agent = true;
+
+      return true;
+    case '-g':
+    case '--global':
+      flags.global = true;
+
+      return true;
+    case '--color':
+    case '--no-color':
+      applyColorFlag(arg);
+
+      return true;
+    default:
+      if (arg.startsWith('--color=')) {
+        applyColorFlag(arg);
+
+        return true;
+      }
+
+      return false;
+  }
+}
+
+/**
+ * Applies a `--flag value` option at `argv[i]`. Returns the index of the last argv
+ * entry it consumed, or undefined when `argv[i]` is not such an option.
+ */
+function applyValueFlag(
+  argv: string[],
+  i: number,
+  flags: CliFlags,
+  scan: ValueScan,
+): number | undefined {
+  const outputPath = takeNamed(argv, i, '--output') ?? takeNamed(argv, i, '-o');
+
+  if (outputPath) {
+    flags.outputPath = outputPath.value.trim();
+
+    return outputPath.next;
+  }
+
+  const format = takeNamed(argv, i, '--format') ?? takeNamed(argv, i, '-f');
+
+  if (format) {
+    scan.formatRaw = format.value;
+
+    return format.next;
+  }
+
+  const failOn = takeNamed(argv, i, '--fail-on');
+
+  if (failOn) {
+    if (failOn.value !== 'fail' && failOn.value !== 'warn') {
+      throw new Error('--fail-on must be "fail" or "warn"');
+    }
+
+    flags.failOn = failOn.value;
+
+    return failOn.next;
+  }
+
+  const maxBytes = takeNamed(argv, i, '--max-bytes');
+
+  if (maxBytes) {
+    scan.maxBytesRaw = maxBytes.value;
+
+    return maxBytes.next;
+  }
+
+  const initDate = takeNamed(argv, i, '--init-date');
+
+  if (initDate) {
+    flags.initDate = parseGscDate(initDate.value, '--init-date');
+
+    return initDate.next;
+  }
+
+  const endDate = takeNamed(argv, i, '--end-date');
+
+  if (endDate) {
+    flags.endDate = parseGscDate(endDate.value, '--end-date');
+
+    return endDate.next;
+  }
+
+  return undefined;
 }
 
 /** Applies `--format` / `-f` / `--json`, then drops html and markdown outside report commands. */

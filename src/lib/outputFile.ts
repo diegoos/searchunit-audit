@@ -1,6 +1,7 @@
 import { chmodSync, closeSync, constants, mkdirSync, openSync, writeSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import { fileOutputFormat, type CliFlags } from './args.ts';
+import { payloadJson } from './invisibleText.ts';
 
 /** Writes `body` to `path` (mode 0600). Does not follow a symlink at the final path. */
 export function writeOutputFile(opts: { path: string; body: string }): string {
@@ -38,7 +39,7 @@ export function persistFileOutput(opts: {
   }
 
   const format = fileOutputFormat(opts.flags.outputPath);
-  const body = format === 'json' ? `${JSON.stringify(opts.json, null, 2)}\n` : opts.markdown;
+  const body = format === 'json' ? `${payloadJson(opts.json, 2)}\n` : opts.markdown;
   const path = writeOutputFile({ path: opts.flags.outputPath, body });
 
   if (!opts.flags.silent) {
