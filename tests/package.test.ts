@@ -10,21 +10,17 @@ const root = join(dirname(fileURLToPath(import.meta.url)), '..');
 const cli = join(root, 'dist', 'cli.js');
 
 describe('npm package contract', () => {
-  test('bin points at the Node bundle', () => {
+  test('ships dist/cli.js as the bin, dist only, as a public scoped package for Node 20+', () => {
     expect(pkg.bin).toEqual({ searchunit: 'dist/cli.js' });
-  });
-  test('files ships dist only', () => {
     expect(pkg.files).toEqual(['dist']);
-  });
-  test('scoped package publishes public for Node 20+', () => {
     expect('private' in pkg).toBe(false);
     expect(pkg.publishConfig).toEqual({ access: 'public' });
     expect(pkg.engines).toEqual({ node: '>=20' });
   });
-  test('--version matches package.json', () => {
+  test('VERSION matches package.json', () => {
     expect(VERSION).toBe(pkg.version);
   });
-  test('node dist/cli.js --version prints the package version', () => {
+  test('the built bundle runs under Node and prints the package version', () => {
     if (!existsSync(cli)) {
       const build = spawnSync('bun', ['run', 'build'], { encoding: 'utf8', cwd: root });
 
