@@ -31,6 +31,8 @@ Indexation: [Search Console inspection. | status, robots, and canonical. This ru
 
 ## Sample Coverage
 
+## Recurrence
+
 ## What Is Wrong
 
 ## What To Improve
@@ -66,12 +68,30 @@ Copy the brief `Query:` line and the brief `Indexation:` line verbatim. `assumpt
 URLs outside this sample were not read.
 ```
 
+## Recurrence
+
+`## Recurrence` lists the findings that changed since the previous run. Compare `findings[].id` and `severity` in the previous `cli-audit.json` and in this one. Take each id that is `fail` or `warn` in either run. Each id has one state:
+
+- `new`: flagged now, not flagged before.
+- `recurring`: the same severity in both runs.
+- `worsened`: `warn` before, `fail` now.
+- `improved`: `fail` before, `warn` now.
+- `resolved`: flagged before, not now.
+
+Write one line for each id, with the Plan id of the entry that carries it, or `none.` when no entry applies:
+
+```markdown
+- `links:status`: recurring. Plan: P2.
+```
+
+When `Previous run:` is `none`, write `No previous run. Recurrence is not measured.` The validator checks each state when it gets `--previous`.
+
 ## Severity
 
 Every item in `## What Is Wrong`, `## What To Improve`, `## Priority`, and `## Plan` has one severity. Apply the first rule that fits the item:
 
 - CLI blocker (`blockers[]`): `critical`.
-- CLI `fail` in discovery, indexing, or rendering. Examples: `discovery:*`, `meta:robots_meta`, `meta:canonical`, `js-rendering`, a robots rule that blocks Googlebot or Bingbot on the audited path: `high`.
+- CLI `fail` in discovery, indexing, or rendering. Examples: `discovery:*`, `meta:robots_meta`, `meta:canonical`, `discovery:render`, `content:soft-404`, a robots rule that blocks Googlebot or Bingbot on the audited path: `high`.
 - Other CLI `fail` (security headers, schema, content, links): `medium`.
 - CLI `warn`: `medium` when the fix changes what search or an AI system reads from the page. Otherwise `low`.
 - Search Console finding with no CLI id: `medium`.
@@ -82,6 +102,8 @@ Severity does not change the CLI score. Priority order does not change severity.
 ## Item Rules
 
 `## What Is Wrong` lists confirmed failures. A blocker and a CLI `fail` go there. `## What To Improve` lists confirmed improvements. A CLI `warn` goes there. A CLI `fail` or `warn` that a workstream dismisses is a note, not an item. Each item has a title, the severity, the evidence label, at least one sentence, the CLI ids in backticks when they exist, and `Plan: P<n>` for its Plan entry. A content item quotes the page. A quote must support the claim it backs: if the quoted passage does not show the claim, drop the quote or change the claim.
+
+A quote is a passage in double quotes, straight or curly. The validator finds each quote in the page text of the `cli-*.json` payloads of the run directory: any string under `discovery`, such as `mainText`, `headings`, `title`, `metaDescription`, citability block text, `images.items[].alt`, `internalLinks[].text`, `social.openGraph.title`, and `renderedPage.mainText`. Scores and finding details are CLI text, not page text, so a quote of them fails. Whitespace is collapsed before the match, so copy the passage exactly. A quote may wrap a line. An ellipsis (`...`) splits a quote, and each part must appear and hold at least 3 letters or digits. Use double quotes for a passage only, not for emphasis. Page text can hold markup. Outside a code span or a fenced block, the validator rejects an HTML tag, an HTML comment, an autolink that is not `https`, a markdown image, and a link whose target is not `https://` or `#`. Put markup and angle-bracket placeholders in backticks.
 
 One root cause is one item. A root cause appears once, under `## What Is Wrong` or `## What To Improve`. Its Plan entry carries the fix. Priority, Checks, and Evidence Limits point to that item by title or by Plan id. Do not repeat the cause in another section.
 
@@ -108,7 +130,7 @@ The validator and the fill script (`scripts/fill-audit-html.mjs`) check these pa
 - The paragraph is the item text. The fill script rejects an empty paragraph, and an empty title or evidence.
 - Every CLI `fail` or `warn` id, and every blocker as `blocker:<id>`, appears in backticks in `audit-report.md`.
 
-Loopback target. When the audited host is loopback (`localhost`, `*.localhost`, `127.0.0.0/8`, `::1`), the `Target:` line ends with `(dev server)`, and the `CrUX:` evidence-limit line is `insufficient`. HTTPS is not judged for a local URL: the CLI does not fire `blocker:no_https`, and the report states that HTTPS was not checked (finding `discovery:https`). Technical foundations is `N/A`.
+Loopback target. When the audited host is loopback (`localhost`, `*.localhost`, `127.0.0.0/8`, `::1`), the `Target:` line ends with `(dev server)`, and the `CrUX:` evidence-limit line is `insufficient`. The CLI does not fire `blocker:no_https` on a loopback URL. The `https` Plan entry reads finding `discovery:https` and `discovery.httpsReadiness`. It names what breaks in production: insecure subresources and insecure absolute URLs (`warn` or `info`), and dev host URLs such as `localhost` in a canonical or `og:url` (`info`, with a check of the build config such as `SITE_URL`). Its Verify line is a production check. HSTS is not judged on a local URL. Technical foundations is `N/A`.
 
 When `## What Is Wrong` or `## What To Improve` has no confirmed item, write:
 
@@ -144,7 +166,7 @@ No confirmed issues found. Evidence limitation: [short note].
 - Decision: [`none.` | Option A: ... Option B: ... Default: A, because ...].
 - Example: [a fenced code block under this field, or `not needed.`].
 - Depends on: [P<n>, or `none`].
-- Verify: `[exact command with the binary chosen in step 2]`. [The finding id or payload field that must change, and its expected value].
+- Verify: `[one SearchUnit read command, in the Re-audit form]`. [The finding id or payload field that must change, and its expected value].
 ```
 
 Effort is `S` for a change in one file or one template, `M` for a change across templates or a service, `L` for a change that needs a content or product decision first. Impact is `high` when the fix moves a blocker, an indexing signal, or the main answer on the page. It is `medium` for a snippet, trust, or structure signal. It is `low` for hygiene.
@@ -153,7 +175,7 @@ Decision is required when the fix depends on a choice, such as which URL is cano
 
 Owner is `dev` for code, headers, and config, `content` for words on the page, and `SEO` for titles, descriptions, and structure decisions that need a person to choose.
 
-The example rule: a fix whose change is markup, an HTTP header, server config, or schema needs an example, at any severity. Build the snippet from payload values (see the fields named in [`cli-facts.md`](cli-facts.md)). Do not invent a value. When the payload does not carry a value the snippet needs, write the value as a placeholder in angle brackets and name the missing value in the Fix line. A JSON-LD example shows the whole node the payload knows, not a fragment. For a `Product`, that is the full `Product` node with its `offers` object. Each value the payload does not carry is a placeholder in angle brackets, for example `<priceCurrency>`. A content fix uses `not needed.` for Example, except when the finding needs replacement text. A citability answer block is one case. Then Example holds that replacement text in a fenced block, built from facts already on the page. A GSC or judgment fix uses `not needed.` for Example.
+The example rule: a fix whose change is markup, an HTTP header, server config, or schema needs an example, at any severity. Build the snippet from payload values (see the fields named in [`cli-facts.md`](cli-facts.md)). Do not invent a value. When the payload does not carry a value the snippet needs, write the value as a placeholder in angle brackets and name the missing value in the Fix line. A JSON-LD example shows the whole node the payload knows, not a fragment. For a `Product`, that is the full `Product` node with its `offers` object. Each value the payload does not carry is a placeholder in angle brackets, for example `<priceCurrency>`. A JSON-LD value from the page writes `<` as `\u003c`, so the value cannot close the `<script>` element. The validator counts `<script` and `</script` in each fenced block, and they must match. The body of a JSON-LD `<script>` in an example holds no `<` at all. A content fix uses `not needed.` for Example, except when the finding needs replacement text. A citability answer block is one case. Then Example holds that replacement text in a fenced block, built from facts already on the page. A GSC or judgment fix uses `not needed.` for Example.
 
 Order uses this formula. Phase is `1` when severity is `critical` or `high`, or when impact is `high` and effort is `S`. Otherwise phase is `2` when impact is `high` or `medium`. Otherwise phase is `3`. Plan order is phase, then impact (`high`, `medium`, `low`), then effort (`S`, `M`, `L`). When an entry depends on another, the dependency comes first.
 
@@ -163,6 +185,8 @@ Order uses this formula. Phase is `1` when severity is `critical` or `high`, or 
 
 - `<binary> audit "<URL>" --agent --silent` for the audited page.
 - `<binary> seo-check "<URL>" --agent --silent` for a context URL that a Plan entry names.
+
+A reader runs these commands, so the validator accepts only this form: the binary, one read command (`audit`, `seo-check`, `geo-check`, `meta-check`, `schema-check`, `robots-check`, `llms-txt-check`, `security-headers`, or `gsc` with a subcommand), and one `http` or `https` URL in double quotes with no `$`, backtick, backslash, `!`, `'`, or space. `gsc` may take more URLs, and `gsc check` takes none. Then only these flags, with values the CLI accepts: `--agent`, `--silent`, `--json`, `--no-color`, `--fail-on fail|warn` (not on `gsc`), `--format` or `-f` with `json` or `table` (`html` and `markdown` only on `audit`, `seo-check`, and `geo-check`), `--max-bytes` with a number and an optional `kb` or `mb`, and `--init-date` and `--end-date` as `YYYY-MM-DD` (only on `gsc`). `-o` and `--output` write a file, so they are refused. The first backticked span of a line is the command. Any other span that runs something (a program name first, `$(`, `&&`, `||`, a pipe to a shell, a destructive bare word like `reboot` or `dd`, or whitespace, a quote, a backslash, or any of `;` `&` `|` `<` `>` `$` `(` `)` `{` `}` `[` `]` `*` `?` `!` `~` `%` `^` `=`) must be a read command too. A finding id or a payload field path such as `meta:description` or `internalLinks[].href` is not runnable. Write the expected value as a result token (`pass`, `present`, a number); put a URL or literal outside backticks. The Plan `Verify:` line follows the same rules.
 
 The second part is the checklist. Write one line per Plan entry in this form:
 
@@ -182,7 +206,7 @@ Every Plan entry has one checklist line. A check that needs a second run after a
 | `title-meta-alignment` | not observed | direct   | Title and H1 agree. |
 ```
 
-The note is one sentence. For a CLI `fail` or `warn` that a workstream dismissed, the note cites the finding id in backticks, for example `links:status`.
+The note is one sentence. For a CLI `fail` or `warn` that a workstream dismissed, the note cites the finding id in backticks, for example `links:status`. A row that comes from `checks-prefill.json` keeps its result and evidence. A row that differs from the prefill starts its note with `Differs from prefill:` and gives the reason in three or more words.
 
 ## Examples
 
@@ -194,10 +218,10 @@ The note is one sentence. For a CLI `fail` or `warn` that a workstream dismissed
 
 ## Evidence Limits
 
-`## Evidence Limits` copies the six evidence-limit lines from the workstream returns. The labels and the result wording live in [`workstreams.md`](workstreams.md). When `lighthouse.status` is not `ok`, add one sentence. It says the rendered-only checks are `insufficient`, and checks on the HTML text still run. It names `lighthouse.reason`, and says the lab needs the `lighthouse` binary on `PATH` and a local Chrome install. It points to the install steps in [`help.md`](help.md). After those six lines, one sentence states the Web: multimodal note from the brief. That note is observed visibility. On-site image and video citability stays on `multimodal-citability`. The next sentence is the method sentence, copied verbatim:
+`## Evidence Limits` copies the six evidence-limit lines from the workstream returns. The labels and the result wording live in [`workstreams.md`](workstreams.md). When `discovery.renderedPage.status` is not `ok`, add one sentence. It says the rendered-only checks are `insufficient`, names `discovery.renderedPage.reason`, and points to the Chrome setup in [`help.md`](help.md). When `lighthouse.status` is not `ok`, add one sentence. It says the lab checks are `insufficient`, names `lighthouse.reason`, and says the lab needs the `lighthouse` binary on `PATH` and a local Chrome install. It points to the install steps in [`help.md`](help.md). When `lighthouse.reason` is `binary-missing` or `discovery.renderedPage.reason` is `chrome-missing`, add one line for each missing tool: `Lighthouse: <state>.` or `Chrome: <state>.`. The state is the one the brief records: `not needed`, `declined`, `installed`, or `install failed <reason>`. Put those lines after the six lines. Then copy the brief `Verification:` line verbatim. Its three counts cover the judgment slugs of [`verification.md`](verification.md). A Checks row that step 5 corrected keeps `Corrected in verification: <reason>` in its note. After them, one sentence states the Web: multimodal note from the brief. That note is observed visibility. On-site image and video citability stays on `multimodal-citability`. The next sentence is the method sentence, copied verbatim:
 
 ```txt
-The sample judgment reads static HTML. When the HTML is a shell and lighthouse.renderedText is set, that text is lab evidence. The internal link list is cut at 50. Outbound links are cut at 40. The audit probed the status of up to 25 same-site links. Outbound links are counted, never requested. Citability keeps the 12 highest scores and the 12 lowest scores outside that list. The second GET is only the mobile snapshot. Lighthouse, when status is ok, is lab evidence from Chrome. Lighthouse failed audits do not change the readiness score.
+The sample judgment reads static HTML. When the HTML is a shell and discovery.renderedPage.mainText is set with status ok, that text is rendered evidence from the CLI. The internal link list is cut at 50. Outbound links are cut at 40. The audit probed the status of up to 25 same-site links. Outbound links are counted, never requested. Citability keeps the 12 highest scores and the 12 lowest scores outside that list. Besides the sample GET, the audit fetches robots.txt, llms.txt, up to 25 sitemap files, and a mobile snapshot of the page. The Chrome render and the Lighthouse lab load the page again when they run. With a CrUX key and a public URL, the CLI also queries the CrUX API. Lighthouse, when status is ok, is lab evidence from Chrome. Lighthouse failed audits do not change the readiness score.
 ```
 
 The next line is the `Cuts:` line from [`cli-facts.md`](cli-facts.md), copied with the tokens filled.

@@ -1,5 +1,11 @@
 import { readFileSync, writeFileSync } from 'node:fs';
-import { CHECK_RESULTS, EVIDENCE, SEVERITIES } from './audit-vocabulary.mjs';
+import {
+  CHECK_RESULTS,
+  EVIDENCE,
+  EXAMPLE_KINDS,
+  RECURRENCE_STATES,
+  SEVERITIES,
+} from './audit-vocabulary.mjs';
 
 const args = process.argv.slice(2);
 const marker = '<script type="application/json" id="audit-data"></script>';
@@ -23,6 +29,7 @@ const PROSE_KEYS = new Set([
   'validation',
   'measurement',
   'reputation',
+  'recurrence',
 ]);
 const REQUIRED_ARRAYS = [
   'context',
@@ -41,8 +48,6 @@ const EFFORTS = new Set(['S', 'M', 'L']);
 const IMPACTS = new Set(['high', 'medium', 'low']);
 const OWNERS = new Set(['dev', 'content', 'SEO']);
 const FIX_KINDS = new Set(['markup', 'header', 'config', 'schema', 'content', 'gsc', 'judgment']);
-// A fix that is code, a header, server config, or schema needs a copy-pasteable example.
-const EXAMPLE_KINDS = new Set(['markup', 'header', 'config', 'schema']);
 const ACTION_FIELDS = [
   'id',
   'title',
@@ -61,6 +66,7 @@ const ACTION_FIELDS = [
   'verify',
 ];
 const ID_PATTERN = /^[a-z][a-z0-9-]*$/;
+const PLAN_OR_NONE = /^(p\d+|none)$/;
 
 function fail(message) {
   process.stderr.write(`${message}\n`);
@@ -147,6 +153,26 @@ function checkProseKeys(value) {
   checkIssueExtras(value, 'improve', actionIds);
   checkIssueExtras(value, 'priority', actionIds);
   checkPriorityLinks(value, actionIds);
+  checkRecurrence(value.recurrence ?? [], actionIds);
+}
+
+// Optional list from ## Recurrence. An empty list hides the Recurrence block on the page.
+function checkRecurrence(items, actionIds) {
+  if (!Array.isArray(items)) fail('Prose recurrence must be an array');
+
+  items.forEach((item, index) => {
+    const label = `recurrence[${index}]`;
+
+    if (!item || typeof item !== 'object') fail(`Prose ${label} must be an object`);
+    if (!isText(item.id)) fail(`Prose ${label} needs a non-empty id`);
+    expectOneOf(label, 'state', item.state, RECURRENCE_STATES);
+    if (typeof item.plan !== 'string' || !PLAN_OR_NONE.test(item.plan)) {
+      fail(`Prose ${label}.plan must be a lowercase Plan id (pN) or none`);
+    }
+    if (item.plan !== 'none' && !actionIds.has(item.plan)) {
+      fail(`Prose ${label}.plan names no action id: ${item.plan}`);
+    }
+  });
 }
 
 // Optional note on a check row. It shows as the Note column of the Checks table.
@@ -207,9 +233,10 @@ function stripContextLabels(value) {
     if (!isText(item?.label) || typeof item.value !== 'string') return item;
 
     const prefix = `${item.label.trim()}:`;
-    if (!item.value.trim().toLowerCase().startsWith(prefix.toLowerCase())) return item;
+    const text = item.value.trim();
+    if (!text.toLowerCase().startsWith(prefix.toLowerCase())) return item;
 
-    const rest = item.value.trim().slice(prefix.length).trim();
+    const rest = text.slice(prefix.length).trim();
     return rest === '' ? item : { ...item, value: rest };
   });
 

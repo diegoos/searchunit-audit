@@ -4,6 +4,11 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>SearchUnit Audit</title>
+    <!-- The page shows site text from the audit. If an escape ever fails, this policy still blocks remote images, requests, and frames. -->
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline' https://fonts.googleapis.com; font-src https://fonts.gstatic.com; img-src data:; connect-src 'none'; frame-src 'none'; base-uri 'none'; form-action 'none'"
+    />
     <script>
       (function () {
         var theme = 'light';
@@ -1701,7 +1706,7 @@
             title: 'The page has no JSON-LD',
             evidence: 'direct',
             severity: 'critical',
-            ids: ['blocker:no_structured_data', 'schema:type'],
+            ids: ['blocker:no_structured_data', 'schema:jsonld'],
             affected: 'https://www.test.com/',
             text: 'The page has no JSON-LD. Blocker no_structured_data caps structured data at 25.',
           },
@@ -1720,7 +1725,7 @@
             title: 'HSTS is absent from the response',
             evidence: 'direct',
             severity: 'medium',
-            ids: ['security:hsts'],
+            ids: ['security:strict-transport-security'],
             affected: 'https://www.test.com/',
             text: 'The response does not send HSTS. HSTS is absent, and that header moves the technical component the same way the other four do.',
           },
@@ -1743,18 +1748,18 @@
         ],
         findings: [
           {
-            id: 'schema:type',
+            id: 'schema:jsonld',
             source: 'schema',
             severity: 'fail',
-            title: 'Type',
-            detail: 'JSON-LD is absent from the page.',
+            title: 'JSON-LD',
+            detail: 'no application/ld+json blocks',
           },
           {
-            id: 'schema:graph',
-            source: 'schema',
-            severity: 'warn',
-            title: 'Graph',
-            detail: 'Without JSON-LD, @graph and @id are absent.',
+            id: 'speakable:jsonld',
+            source: 'speakable',
+            severity: 'info',
+            title: 'Speakable',
+            detail: 'missing (optional)',
           },
           {
             id: 'meta:title',
@@ -1771,28 +1776,28 @@
             detail: 'Present, 86 characters.',
           },
           {
-            id: 'content:words',
+            id: 'content:author',
             source: 'content',
             severity: 'warn',
-            title: 'Length',
-            detail: '420 words in the HTML.',
+            title: 'Author',
+            detail: 'missing',
           },
           {
-            id: 'crawlers:search-bot',
+            id: 'crawlers:Googlebot',
             source: 'crawlers',
             severity: 'pass',
-            title: 'Search bot',
-            detail: 'Allowed in robots.txt.',
+            title: 'Googlebot',
+            detail: 'allowed, live-retrieval gate (search)',
           },
           {
-            id: 'citability:answer',
+            id: 'citability:citation-ready',
             source: 'citability',
             severity: 'info',
-            title: 'Answer block',
+            title: 'Citation-ready blocks',
             detail: 'There is no direct block of one to three sentences.',
           },
           {
-            id: 'security:hsts',
+            id: 'security:strict-transport-security',
             source: 'security-headers',
             severity: 'info',
             title: 'HSTS',
@@ -1846,7 +1851,7 @@
             effort: 'M',
             impact: 'medium',
             owner: 'dev',
-            source: 'security:hsts',
+            source: 'security:strict-transport-security',
             location: 'Response headers of the HTTPS origin',
             current: 'absent',
             target: 'Strict-Transport-Security: max-age=31536000',
@@ -1854,7 +1859,7 @@
             fixKind: 'header',
             example: 'Strict-Transport-Security: max-age=31536000; includeSubDomains',
             verify:
-              'searchunit audit "https://www.test.com/" --agent --silent. Finding security:hsts is pass.',
+              'searchunit audit "https://www.test.com/" --agent --silent. Finding security:strict-transport-security is pass.',
             open: false,
           },
         ],
@@ -2281,6 +2286,8 @@
             : null,
           sitemapUrls: sitemap ? sitemap.urls || [] : null,
           lighthouse: report.lighthouse || null,
+          render: discovery.renderedPage || null,
+          httpsReadiness: discovery.httpsReadiness || null,
           structuredData: page
             ? { ...(page.structuredData || {}), markup: page.markupFormats || null }
             : null,
@@ -2780,6 +2787,27 @@
         return `${actionableHtml}${quietHtml}`;
       }
 
+      // Recurrence states use the same tones as findings: worse is fail, better is ok.
+      const RECURRENCE_TONE = {
+        new: 'warn',
+        recurring: 'info',
+        worsened: 'fail',
+        improved: 'ok',
+        resolved: 'ok',
+      };
+
+      function recurrenceHtml(items) {
+        const list = items.map((item) => {
+          const tone = RECURRENCE_TONE[item.state] || '';
+          const plan = item.plan && item.plan !== 'none' ? planHtml(item.plan) : '';
+          return `<li class="item ${esc(tone)}">
+              <div class="item-head"><span class="glyph ${esc(tone)}" aria-hidden="true">${TONE_ICON[tone] || '·'}</span><h4><code>${esc(item.id)}</code></h4><span class="mark ${esc(tone)}">${esc(item.state)}</span></div>
+              ${plan}
+            </li>`;
+        });
+        return `<ul class="items">${list.join('')}</ul>`;
+      }
+
       function sampleHtml(doc) {
         if (doc.sample == null)
           return `<p class="empty">The sample coverage is not in this file.</p>`;
@@ -2903,7 +2931,7 @@
       const LIMITS_NO_RANKING =
         'This report states no ranking, traffic, revenue, or citation outcome.';
       const LIMITS_METHOD =
-        'The sample judgment reads static HTML. When the HTML is a shell and lighthouse.renderedText is set, that text is lab evidence. The internal link list is cut at 50. Outbound links are cut at 40. The audit probed the status of up to 25 same-site and 10 outbound links. Citability keeps the 12 highest scores and the 12 lowest scores outside that list. The second GET is only the mobile snapshot. Lighthouse, when status is ok, is lab evidence from Chrome. Lighthouse failed audits do not change the readiness score.';
+        'The sample judgment reads static HTML. When the HTML is a shell and discovery.renderedPage.mainText is set with status ok, that text is rendered evidence from the CLI. The internal link list is cut at 50. Outbound links are cut at 40. The audit probed the status of up to 25 same-site links. Outbound links are counted, never requested. Citability keeps the 12 highest scores and the 12 lowest scores outside that list. Besides the sample GET, the audit fetches robots.txt, llms.txt, up to 25 sitemap files, and a mobile snapshot of the page. The Chrome render and the Lighthouse lab load the page again when they run. With a CrUX key and a public URL, the CLI also queries the CrUX API. Lighthouse, when status is ok, is lab evidence from Chrome. Lighthouse failed audits do not change the readiness score.';
 
       // The Cuts line keeps its label. A value that already starts with "Cuts:" is not doubled.
       function cutsLine(value) {
@@ -2977,13 +3005,14 @@
       }
 
       function lighthouseHtml(lh) {
-        if (!lh || lh.status === 'skipped') return '';
+        if (!lh || lh.reason === 'not-requested') return '';
         if (lh.status !== 'ok') {
-          const hint =
-            lh.reason === 'binary-missing'
-              ? `<p class="prose">${esc('Install Lighthouse (npm i -g lighthouse) and Chrome, then re-run with -o file.json.')}</p>`
-              : '';
-          return `<p class="prose">The lab run did not finish. Reason: <code>${esc(lh.reason || 'no reason')}</code>. The audit score does not change.</p>${hint}`;
+          const hint = lh.install
+            ? `<p class="prose">${esc(`${lh.install}, then re-run with -o file.json.`)}</p>`
+            : '';
+          const state =
+            lh.status === 'skipped' ? 'The lab was skipped' : 'The lab run did not finish';
+          return `<p class="prose">${state}. Reason: <code>${esc(lh.reason || 'no reason')}</code>. The audit score does not change.</p>${hint}`;
         }
         const metrics = LH_METRICS.filter(([key]) => lh.metrics && lh.metrics[key] != null).map(
           ([key, label, unit]) => ({ label, value: `${formatNum(lh.metrics[key])}${unit}` }),
@@ -3018,6 +3047,62 @@
             <h3 class="sub-title">Failed audits</h3>
             ${table}
           </div>`;
+      }
+
+      function renderHtml(render) {
+        if (!render || render.reason === 'not-requested') return '';
+        if (render.status !== 'ok') {
+          const hint = render.install
+            ? `<p class="prose">${esc(`${render.install}, then re-run with -o file.json.`)}</p>`
+            : '';
+          return `<p class="prose">The Chrome render did not finish. Reason: <code>${esc(render.reason || 'no reason')}</code>. Rendered-only checks are insufficient.</p>${hint}`;
+        }
+        const onlyAfter = render.linksOnlyAfterRender || [];
+        return factsHtml(
+          keep([
+            { label: 'Title', value: render.title },
+            { label: 'H1', value: Array.isArray(render.h1) ? render.h1.join('; ') : render.h1 },
+            {
+              label: 'Words',
+              value: render.wordCount != null ? formatNum(render.wordCount) : null,
+            },
+            { label: 'Canonical', value: render.canonicalUrl, href: render.canonicalUrl },
+            { label: 'Robots', value: render.effectiveRobotsDirective },
+            {
+              label: 'Internal links',
+              value: render.internalLinkCount != null ? formatNum(render.internalLinkCount) : null,
+            },
+            {
+              label: 'Links only after render',
+              value: onlyAfter.length
+                ? `${formatNum(render.linksOnlyAfterRenderCount ?? onlyAfter.length)}: ${onlyAfter.slice(0, 5).join(', ')}`
+                : 'none',
+            },
+          ]),
+        );
+      }
+
+      function httpsReadinessHtml(readiness) {
+        if (!readiness) return '';
+        const rows = [
+          ...(readiness.insecureSubresources || []).map((url) => ['Insecure subresource', url]),
+          ...(readiness.insecureUrls || []).map((item) => [
+            `Insecure URL (${item.field})`,
+            item.url,
+          ]),
+          ...(readiness.devHostUrls || []).map((item) => [
+            `Dev host URL (${item.field})`,
+            item.url,
+          ]),
+        ];
+        if (!rows.length) {
+          return '<p class="empty">Nothing on this page breaks when it is served over HTTPS.</p>';
+        }
+        return tableHtml(
+          'What breaks on the HTTPS production URL',
+          ['Kind', 'URL'],
+          rows.map(([kind, url]) => [esc(kind), `<span class="break">${esc(url)}</span>`]),
+        );
       }
 
       function structuredHtml(sd) {
@@ -3246,6 +3331,18 @@
             lighthouseHtml(doc.lighthouse),
           ],
           [
+            'render',
+            'Chrome render',
+            'The page after JavaScript ran in Chrome. The render adds findings, not score.',
+            renderHtml(doc.render),
+          ],
+          [
+            'https-readiness',
+            'HTTPS readiness',
+            'Local dev server only: what breaks when the page is served over HTTPS.',
+            httpsReadinessHtml(doc.httpsReadiness),
+          ],
+          [
             'structured-data',
             'Structured data',
             'JSON-LD blocks on the page, the type each declares, and the props it lacks.',
@@ -3387,6 +3484,7 @@
           ['limits', 'Limits'],
         ];
         if (doc.validation != null) evidence.push(['validation', 'Validation']);
+        if (!isBlank(doc.recurrence)) evidence.unshift(['recurrence', 'Recurrence']);
         const link = ([id, label]) => `<a href="#${id}">${esc(label)}</a>`;
 
         return `<div class="layout">
@@ -3416,6 +3514,7 @@
                 <p class="block-sub">Below is what this reading opened. The order stays in What to fix.</p>
               </header>
             </div>
+            ${isBlank(doc.recurrence) ? '' : sectionCard('recurrence', 'Recurrence', 'Findings that changed since the previous run. The state compares the two runs.', recurrenceHtml(doc.recurrence))}
             ${sectionCard('sample', 'Sample', 'URLs this reading opened.', sampleHtml(doc))}
             ${sectionCard('page', 'Page', 'What the audited URL HTML contains, plus sitemap, llms.txt, redirects, and CrUX.', pageBody(doc))}
             ${labCards.map((card) => sectionCard(card[0], card[1], card[2], card[3])).join('')}

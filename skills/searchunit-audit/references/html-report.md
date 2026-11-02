@@ -76,6 +76,7 @@ Read this file after the markdown read matches [`user-report.md`](user-report.md
   "sample": [{ "url": "", "role": "primary", "template": "", "status": "", "seo": "" }],
   "sampleSentence": "URLs outside this sample were not read.",
   "examples": [],
+  "recurrence": [{ "id": "", "state": "", "plan": "none" }],
   "gsc": {
     "summary": "",
     "queryPages": [{ "query": "", "page": "", "clicks": "", "impressions": "", "position": "" }],
@@ -97,13 +98,13 @@ When the markdown `Previous run:` line names a directory, add a context row whos
 
 When the markdown `Query:` or `Indexation:` line is present, add a context row for each. The label is `Query` or `Indexation` written in the report language. The value is that line without its `Query:` or `Indexation:` prefix. The page shows the label and the value, so a value that repeats the label reads twice. The script also removes a leading `<label>:` from a value when that label equals the row's label, ignoring case.
 
-`wrong` and `improve` copy `## What Is Wrong` and `## What To Improve`. Each item copies its severity, its CLI ids (without backticks) into `ids`, and its affected URL or template into `affected`. `plan` copies the item's `Plan: P<n>` id in lowercase form, for example `p1`. The page links the item to that Plan entry. It is optional. `quote` stays on a content item that has one. A section whose text is `No confirmed issues found. Evidence limitation: ...` becomes `[]`.
+`wrong` and `improve` copy `## What Is Wrong` and `## What To Improve`. Each item copies its severity, its CLI ids (without backticks) into `ids`, and its affected URL or template into `affected`. `plan` copies the item's `Plan: P<n>` id in lowercase form, for example `p1`. The page links the item to that Plan entry. It is optional. `quote` stays on a content item that has one. The validator with `--prose` checks each `quote`, and each double-quoted passage in `text`, against the page text with the same rule as the markdown quotes. A section whose text is `No confirmed issues found. Evidence limitation: ...` becomes `[]`.
 
 `priority` copies `## Priority` in the same order. `title` must equal a `wrong` or `improve` title exactly. `action` is the lowercase Plan id of that item, for example `p1` for `P1`. The page links the priority title to that Plan entry.
 
 `actions` copies `## Plan`, one object per entry, in the same order. `id` is the lowercase Plan id. `title`, `severity`, `phase`, `effort`, `impact`, `owner`, `source`, `location`, `why`, `fix`, and `fixKind` copy the matching field. `current` and `target` copy the two sides of `Current → target`. `decision` (optional) copies `Decision`, and `none` stays `none`. `dependsOn` copies `Depends on`, and `none` stays `none`. `example` is the body of the fenced block, without the fence lines, and an entry with `not needed.` leaves it empty. `verify` copies the `Verify` field.
 
-`validation` copies `## Re-audit`, one object per checklist line. `command` is the command in backticks. `check` is the rest of the line, prefixed with the Plan id in lowercase form, with backticks removed. For example, a checklist line that names the command `searchunit audit ...` and the check `security:csp` is `pass` becomes the object `{ "command": "searchunit audit ...", "check": "p1: Check security:csp is pass." }`.
+`validation` copies `## Re-audit`, one object per checklist line. `command` is the command in backticks. `check` is the rest of the line, prefixed with the Plan id in lowercase form, with backticks removed. For example, a checklist line that names the command `searchunit audit ...` and the check `security:content-security-policy` is `pass` becomes the object `{ "command": "searchunit audit ...", "check": "p1: Check security:content-security-policy is pass." }`.
 
 `checks` copies `## Checks`. One object per slug. `note` is optional and copies the Note cell. `examples` stays `[]`. Snippets sit in `actions[].example`, so the Examples card is omitted. `seo` on a sample row is the SEO score for that URL. `role` is `primary` or a context role.
 
@@ -111,9 +112,11 @@ When the markdown `Query:` or `Indexation:` line is present, add a context row f
 
 `cuts` is the filled `Cuts:` line from [`cli-facts.md`](cli-facts.md).
 
+`recurrence` copies `## Recurrence`, one object per line. `id` is the backticked finding id, `state` is the state word, and `plan` is the Plan id in lowercase, or `none`. When that section holds `No previous run.`, `recurrence` is `[]`. The page shows the Recurrence block only when the list is not empty. The validator with `--prose` checks that each line and each object match.
+
 `sample` lists every URL in `## Sample Coverage`. `status` comes from that URL's brief row. `sampleSentence` is the verbatim sample sentence.
 
-`limits` is the six evidence-limit lines, in that order, as strings. `multimodal` is the Web: multimodal note. Omit `multimodal` when that note is absent. The method sentence in [`user-report.md`](user-report.md) stays in the markdown, after that note. Leave it out of this JSON.
+`limits` is the six evidence-limit lines, in that order, as strings. A `Lighthouse:` or `Chrome:` install line from the markdown goes in the list too, after the six, and then the `Verification:` line. `multimodal` is the Web: multimodal note. Omit `multimodal` when that note is absent. The method sentence in [`user-report.md`](user-report.md) stays in the markdown, after that note. Leave it out of this JSON.
 
 Leave `measurement` and `reputation` unset. The page omits the measurement subheading only when `measurement` and `multimodal` are both empty. Empty here means null, omitted, or a blank string. When `multimodal` is present and `measurement` is null, the page keeps the measurement heading and the multimodal text, and it leaves out the measurement placeholder. An omitted key hides the same way as null. A key that carries content still renders, including the offline demo. The diagnosis stays a diagnosis.
 
@@ -143,6 +146,7 @@ The script checks these rules:
 - An action with `fixKind` `markup`, `header`, `config`, or `schema` needs a non-empty `example`.
 - Every `validation` item needs `command` and `check`.
 - Every `checks` row needs `slug`, `result`, and `evidence`. Every `sample` row needs `url` and `role`.
+- Every `recurrence` item needs an `id`, a `state` from the recurrence states (`new`, `recurring`, `worsened`, `improved`, `resolved`), and a `plan` that is `none` or an existing action id.
 
 Each item in `## What Is Wrong` and `## What To Improve` therefore has a sentence after its evidence label. Fix the prose file and run the script again. Leave the template unchanged.
 

@@ -4,7 +4,7 @@ Answer from this file when the command is `help`. Use the user's language. Stop 
 
 ## What the skill does
 
-`searchunit-audit` diagnoses the requested URL. That URL is the audited page. Other URLs are context for that page. The CLI supplies the readiness scores and the machine facts. The judgment reads the words in the HTML the CLI returned for the audited page. That judgment does not run JavaScript. When that HTML is a shell and `lighthouse.renderedText` is set, that text is lab evidence. Lighthouse, when its status is ok, is separate lab evidence from Chrome. It writes `docs/searchunit-audit/<YYYY-MM-DD_HH-MM>/audit-report.md` in the workspace. That file is the diagnosis, in the language of the session. After that markdown is checked, it writes `audit-report.html` in the same directory and opens it in the default browser. Fixed captions on that page stay English. Empty CLI stdout writes the stop sentence in `audit-report.md` and does not open the HTML page.
+`searchunit-audit` diagnoses the requested URL. That URL is the audited page. Other URLs are context for that page. The CLI supplies the readiness scores and the machine facts. The judgment reads the words in the HTML the CLI returned for the audited page. That judgment does not run JavaScript. When that HTML is a shell and `discovery.renderedPage.mainText` is set, that text is CLI-rendered evidence. Lighthouse, when its status is ok, is separate lab evidence from Chrome. It writes `docs/searchunit-audit/<YYYY-MM-DD_HH-MM>/audit-report.md` in the workspace. That file is the diagnosis, in the language of the session. After that markdown is checked, it writes `audit-report.html` in the same directory and opens it in the default browser. Fixed captions on that page stay English. Empty CLI stdout writes the stop sentence in `audit-report.md` and does not open the HTML page.
 
 **Skill root** is the directory that contains `SKILL.md`. The audit steps live in `SKILL.md`.
 
@@ -43,16 +43,20 @@ Empty stdout from the chosen binary stops the audit. The report says the audit d
 
 Package page: https://www.npmjs.com/package/@searchunit/cli
 
+## Optional render
+
+The CLI renders the audited page in Chrome on `audit`, when the output is agent markdown, JSON, or a `.json` file. It finds Chrome through `CHROME_PATH`, then through the standard install paths for macOS, Linux, and Windows. Set `CHROME_PATH` to the Chrome binary when Chrome is elsewhere, for example `export CHROME_PATH=/usr/bin/chromium`. Without Chrome, `discovery.renderedPage` has status `skipped` and reason `chrome-missing`, and the rendered-only checks stay `insufficient`. The render adds findings, not score.
+
 ## Optional Lighthouse
 
-Lighthouse adds lab evidence: the rendered main text for a client-rendered page, and the failed Lighthouse audits. The CLI runs the `lighthouse` binary from `PATH`. The package does not install it. Install both pieces:
+Lighthouse adds lab evidence: the failed Lighthouse audits and the lab metrics. The CLI runs the `lighthouse` binary from `PATH`. The package does not install it. Install both pieces:
 
 ```bash
-npm i -g lighthouse
+npm install -g lighthouse
 command -v lighthouse
 ```
 
-`command -v lighthouse` must print a path. Install Google Chrome too. Lighthouse drives a local Chrome. Without the binary, the audit writes `lighthouse.reason` as `binary-missing`. Without Chrome, it writes `chrome-missing`. Other reasons are `timeout` and `error`. In each case `lighthouse.renderedText` is null, and the rendered-only checks stay `insufficient`. The audit does not fail and the readiness scores do not change.
+`command -v lighthouse` must print a path. Install Google Chrome too. Lighthouse drives a local Chrome. Without the binary, the audit writes `lighthouse.reason` as `binary-missing`. Without Chrome, it writes `chrome-missing`. Other reasons are `timeout` and `error`. In each case the lab adds nothing. The audit does not fail, and the readiness scores do not change. The CLI prints the fix in `lighthouse.install` when the binary is missing, and in `discovery.renderedPage.install` when Chrome is missing. The skill asks before it runs an install, as [`SKILL.md`](../SKILL.md) step 2 says.
 
 ## Optional Search Console
 
