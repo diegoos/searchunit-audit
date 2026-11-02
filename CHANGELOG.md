@@ -4,80 +4,54 @@ Versions follow Semantic Versioning. Notes stay under Unreleased until `package.
 
 ## Unreleased
 
-- The sitemap walk fetches at most 5 files at once. On a host that serves sitemaps one at a time, 25 parallel GETs next to the link probe hit the fetch timeout, and the coverage changed between runs.
+### Added
 
-- Lighthouse skips `network-requests` and the screenshot audits. On an ad-heavy news homepage the JSON dropped from about 7–8 MB to 3 MB, so it no longer crosses the 8 MiB output cap that ended some lab runs in `error`.
+- Every `audit`, `seo-check`, and `geo-check` run is a page audit. `discovery.auditScope` sets `level` `page`, `pagesScored` 1, and `contextFetches`. The human report title is `Page Audit`. A host target scores its homepage.
+- `audit` with `--agent`, `--format json`, or a `.json` `-o` renders the page in headless Chrome (`discovery.renderedPage`) and runs the local `lighthouse` binary in parallel. Chrome comes from `CHROME_PATH`, else the default install, and dials only the pinned address through a loopback proxy. A `.md` file does not start Chrome.
+- Finding `discovery:render` compares the raw HTML with the render. A noindex or canonical change fails. Title, H1, meta, schema, text, and internal link changes (by `pageKey`, in `linksOnlyAfterRender`) warn.
+- A missing `lighthouse` binary or Chrome sets `install` on the payload with the install command, and `audit` prints a `note:` line on stderr unless `--silent` or machine output. The CLI never runs `npx` on its own.
+- Lighthouse reads the `seo` and `best-practices` failed audits with `category` and up to 10 `items`, keeps the LCP element, skips the `network-requests` and screenshot audits, and retries once after a crash. A lab miss does not fail the audit or change the score.
+- On a loopback target, `discovery.httpsReadiness` and finding `discovery:https` list what breaks on the HTTPS production URL: `http:` subresources, `http:` canonical, `og:url`, hreflang, or JSON-LD URLs, and dev-host script and stylesheet URLs.
+- `audit` probes the status of the first 25 same-site links (`discovery.linkStatus`, findings `links:status` and `links:redirects`). Outbound links are counted, never requested.
+- The sitemap walk reads up to 5 robots `Sitemap:` roots and follows index children up to 25 files, 5 at a time. It matches the page on `pageKey` and sets `coverage` (`complete` or `partial`) and `filesRead`. `sitemap.urls` holds up to 200 `{ loc, lastmod }` entries.
+- The audited page holds the facts the CLI extracts: main content text and tables, the opening paragraph, H2 and H3 text and the heading outline, citability blocks (12 strongest and 12 weakest), the internal link index, outbound links, image attributes, schema missing and recommended props, microdata and RDFa types, hreflang, HTTP `Link` canonical and hreflang, the `noindex` source, FAQ pairs, videos, visible dates, pagination, author URLs, external resource origins, a mobile snapshot, and SHA-256 hashes of the body and visible text. These fields do not change the scores.
+- New findings: `discovery:search-crawlers`, `discovery:mobile`, `content:soft-404`, `content:url-structure`, `content:heading-order`, `content:date-sanity`, `content:hidden-text`, `content:mixed-content`, `content:trust-pages`, `content:hero-image`, `meta:snippet-limits`, `meta:charset`, `meta:header-canonical`, `meta:hreflang`, `meta:og-image-hero`, `robots:blocked-resources`, and `links:anchor-text`. `discovery:` findings feed `--fail-on`.
+- New finding `content:prompt-injection` warns when any string or key in the discovery payload addresses an AI reader or holds invisible format characters. The score does not change.
+- The crawler catalog includes `Claude-SearchBot` with weight 0.
+- robots.txt and llms.txt fetches retry twice on network errors, timeouts, 429, and 5xx. The last error is in `robotsFetchError` and `llmsTxt.fetchError`.
+- The audit skill has a Verify step: two verifier subagents re-judge the judgment slugs from the run files before they read the auditor's rows. The prefill (`scripts/prefill-checks.mjs`) decides the mechanical slugs, and the report has a `## Recurrence` section that tracks each CLI finding across runs.
 
-- Lighthouse retries once when the lab process crashes (non-zero exit with no report). A missing binary or Chrome, a timeout, or an output overflow is not retried.
+### Changed
 
-- `content:date-sanity` fails only for a future `datePublished` or `dateModified`. A future visible `<time>` alone is `info`, since it is often an event date (seen on a live news homepage with a match schedule).
+- Breaking: scores. Platform optimization reads crawler access, llms.txt, answer formats, and entity signals. AI citability is the page text score. Freshness measures age from `fetchedAt`. Origin-level CrUX no longer sets `poor_core_web_vitals`. hreflang counts only when the set is valid. A visible `<time>` earns the visible-dates points.
+- Breaking: `csr_only_rendering` is a GEO blocker that caps `ai_citability_visibility` at 40, not a technical cap.
+- Breaking: technical foundations is `N/A` (`insufficient`) without field Core Web Vitals. The overall score uses the measured components.
+- Breaking: `wordCount` counts the main content root and `bodyWordCount` the whole body. `images.decorative` counts `alt=""`, and `missingAlt` counts only a missing attribute.
+- Breaking: `internalLinks` and `outboundLinks` entries are `{ href, text, ariaLabel, imgAlt }`. `openGraph.title`, `openGraph.image`, and `twitter.card` are strings or null. `llmsTxt.issues` holds `{ code, line, text }` objects.
+- Breaking: `--agent` markdown prints every string value as a JSON string literal, quotes keys that are not plain field names, and opens with a notice that site text is untrusted.
+- Breaking: a missing `lighthouse` binary or Chrome sets `lighthouse.status` to `skipped`. `error` means only a lab run that failed.
+- Loopback targets count as HTTPS for E-E-A-T and technical checks. `no_https` does not fire, and HSTS is not counted.
+- `pageKey` keeps a non-default port, drops `utm_*`, `gclid`, and `fbclid`, and sorts the other query parameters.
+- Page kind is `home` only on the root path. A non-root page with a listing pattern is `listing`.
+- `meta:canonical` and `meta:og_url` warn when the URL names another page. An empty H1 and a redirect chain longer than one hop are warnings.
+- FAQ credit needs a question heading on the page, and a question heading needs a question form. FAQ headings also match Spanish and French.
+- `content:date-sanity` fails only on a future `datePublished` or `dateModified`, and reads the first `<time>` inside the main content.
+- `citability.opening` and `hasTopSummary` skip a leading byline or date line. `trustPages` matches a whole path segment or the whole anchor text. Robots directives are deduplicated.
 
-- Lighthouse lab works with Lighthouse 12. The rendered-text audit is `informative` (Lighthouse refused it for having no `failureTitle`, so every lab run ended in `error`), the gatherer implements every phase method, and it reads the text with `evaluateAsync`. `lighthouse.renderedText` is now filled.
-- The audit skill requires the exact CLI id in each finding (`cli_ids`), and the HTML fill rejects a `wrong`, `improve`, `priority`, `checks`, or `sample` item with an empty required field.
+### Removed
 
-- The audited page includes `mainText` (the main content text, up to 20000 characters, with a space between blocks and table cells), `mainTextTruncated`, and `tables` (rows of cell texts). The skill reads and quotes the body from them, and the `Cuts:` line has a `main` token.
+- Breaking: `lighthouse.renderedText` and the custom Lighthouse gatherer. Read `discovery.renderedPage.mainText`.
 
-- Every `audit`, `seo-check`, and `geo-check` payload has `discovery.auditScope`: `level` is `page`, `pagesScored` is 1, and `contextFetches` counts the other requests (robots, sitemap files, llms, CrUX, mobile GET, link probes). The human report title is `Page Audit`. The skill copies a `Scope:` line from that field and titles the report with the audited URL.
+### Fixed
 
-- `audit` checks the status of the first 25 same-site links and the first 10 outbound links on the page (`discovery.linkStatus`, findings `links:status`, `links:redirects`). `seo-check` and `geo-check` skip that probe. Generic anchor text is finding `links:anchor-text`.
-- New page findings: `discovery:search-crawlers` (Googlebot or Bingbot blocked on the audited path; it also lowers crawlability), `discovery:mobile` (desktop vs mobile noindex, canonical, status, viewport, H1, and text), `content:heading-order`, `content:date-sanity`, `content:hidden-text`, `content:mixed-content`, `content:trust-pages`, `meta:snippet-limits`, `meta:charset`, `meta:header-canonical`, and `meta:hreflang`. `discovery:` findings feed `--fail-on`. A redirect chain longer than one hop is a warning.
-- `meta:canonical` warns when the canonical names another page by `pageKey`, or is `http:` on an `https:` page. `meta:og_url` warns when `og:url` names another page.
-- Sitemaps: every robots `Sitemap:` line is read (up to 5), index children and nested indexes are followed up to 25 files, and the audited URL matches on `pageKey`. `sitemap.coverage` is `complete` or `partial`, and `sitemap.filesRead` counts the files. The sitemap finding warns when the page is not listed in a complete walk.
-- Breaking: `wordCount` counts the main content root (`main`, else `article`, else `body` without header, nav, footer, and aside). `bodyWordCount` keeps the whole body. Citability and the opening paragraph use the same root. `images.withAlt` counts empty `alt`; `images.decorative` counts `alt=""`; `missingAlt` counts only a missing attribute. A logo is not the hero. Lazy `data-src` images count.
-- Breaking: scores. Platform optimization reads crawler access, llms.txt, answer formats, and entity signals instead of averaging the other components. AI citability is the page text score, with evidence `inferred`. Discover tags no longer add to citability. A bare year is not a statistic. Origin-level CrUX no longer sets `poor_core_web_vitals`. hreflang adds to indexability only when the set is valid. Freshness measures age from `fetchedAt`, so the same payload gives the same score. The page kind is `home` only on the root path.
-- The audited page includes `headings.outline`, `mixedContent`, `hiddenText`, `charset`, and `trustPages`. `discovery.mobileFetchError` names why `mobilePage` is null. Report `fetchedAt` is the page fetch time. `pageKey` sorts query parameters by code point.
-- Crawler findings in the live-retrieval set say `live-retrieval gate` before the category.
-- The audit skill states that it audits one page and that other URLs are evidence for it. It maps every CLI page finding to a workstream slug, compares runs with `visibleTextSha256`, reads sitemap `coverage`, drops the 120–130 meta band, and treats a body over the size cap as a fetch error. The HTML fill rejects prose keys that would replace CLI numbers.
+- A loopback dev server that listens only on `127.0.0.1` can be audited as `http://localhost:<port>`. The pin takes the first loopback address that accepts a TCP connect on the port.
+- `breadcrumbParent` no longer returns the grandparent when the current item has no URL.
+- A JSON-LD `@type` such as `constructor` is an unknown type, not a crash.
 
-- The audited page now includes the opening paragraph, visible `<time>`, HTTP `Link` canonical and hreflang, the `noindex` source, FAQ question and answer text, video elements, image nearby text and a hero flag, and non-empty heading counts. `metaDescription` is only the description meta. `lang` is only `<html lang>`. Citability keeps every scored paragraph, and `blocksTruncated` stays true when a scored block is outside the high and low lists. A `www` link on the same site stays internal. Pagination also reads `a rel="next|prev"`.
-- Breaking: `auditedPage.internalLinks` entries are `{ href, text }`. `openGraph.title`, `openGraph.image`, and `twitter.card` are strings, or null when the tag is missing.
-- `audit` also returns the 12 lowest-scoring citability blocks in `weakBlocks`. `pageKey` drops `utm_*`, `gclid`, and `fbclid` and keeps every other query parameter. The audited page includes outbound links, snippet directives, image width, height, srcset, and loading, schema `missingProps`, and microdata and RDFa type names. These fields do not change the readiness scores. The page audit uses them for the requested URL: sitemap membership, bot `noindex`, a noindex canonical, multiple H1s, date age, word-count band, mobile snapshot differences, Lighthouse failed audits, hreflang return, inlinks from the context URLs already fetched, Search Console position, and query terms on the page.
-- `audit` returns citability blocks in score order and stores every non-empty H2 and H3. `internalLinkIndex` lists same-host page keys before the 50-link cap. `llmsTxt.linksToAuditedUrl` is set before the 100-link cap. `og:url`, `breadcrumbParent`, and a visible-text hash on the desktop and mobile snapshots are on the audited page. The skill compares `html lang` with the brief language and reads `hasSpeakable`. Context URLs now include a second canonical hop, up to three hreflang returns, the pagination neighbor that matches the page, a breadcrumb parent, and a policy URL. The cannibal URL is fetched after Search Console.
-- `audit` stores the full citability block text. `seo-check` and `geo-check` keep the 1500-character cap. `auditedPage.pagination` holds `next` and `prev`. `author.urls` holds up to five author URLs. The report names the query, or that the query is an assumption, and names how indexation was read.
-- `lighthouse.renderedText` is the main text from the same Chrome run, capped at 8000 characters, or null. It does not change the readiness score. `citability.blocksTruncated` is true when more than 12 scored blocks exist.
-- The page audit writes `cli-seo-<n>.json` for each context URL and shows that URL's SEO score on the sample row. The HTML page still reads the primary `cli-audit.json`. Empty CLI stdout writes that the audit did not run and stops. The diagnosis lists Search Console rows, one example per critical or high finding, and a `Cuts:` line. A pasted backlink export, analytics export, or manual action in this run is `direct`.
-- When the target is a host, the page audit scores its homepage. The CLI sitemap object counts URLs and includes up to 200 `{ loc, lastmod }` entries. The skill reads that list from the primary `audit` before it picks template URLs. A `seo-check` score stays on that extra URL. `seo-check` and `geo-check` omit `sitemap.urls` and `llmsTxt.links`.
-- `audit --agent`, `--format json`, and `-o` include the facts the CLI already extracts: sitemap URLs, llms.txt links, `User-agent: *` rules, H2 and H3 text, hreflang links, image alt text, schema id, headline, price, and availability, citability block text, and a static mobile snapshot. The human table stays the deterministic scores. Those fields do not change the scores.
-- When `--agent`, `--format json`, or `-o` with a `.json` path is set, `audit` runs the local `lighthouse` binary after discovery, on the final URL the audit scored. Chrome dials through a loopback proxy that connects only to that pinned address and port. Any other host, including an IP literal, is refused, and a final URL on another host stays off the report. A missing binary, a missing Chrome, a blocked hop, or a lab error stays on `lighthouse` and does not fail the audit or change the score. A `.md` file does not start Chrome. Without those flags the field is `skipped` and Chrome does not start.
-- An H1 element with no text is a warning. A missing H1 element stays a failure.
-- The crawler catalog includes `Claude-SearchBot` with weight 0, so the readiness scores stay the same. `ClaudeBot` stays a training crawler.
-- Audit report prose follows `skills/searchunit-audit/references/prose.md`. The HTML page uses the same plain sentences for its fixed captions and for the example report.
-- `discovery.auditedPage.bodySha256` is the SHA-256 of the audited HTML body. The readiness scores do not read it. The audit skill compares that hash, the readiness numbers, and the blocker ids with the previous saved run of the same URL.
-- The audit skill reads sitemap URLs, llms.txt links, and wildcard robots rules from the primary `audit`. It does not fetch those three files again when the CLI ran. The report states that the method is static HTML, the link list is cut at 50, the second GET is only the mobile snapshot, and Lighthouse is lab evidence. Empty action, validation, measurement, and reputation blocks stay off the HTML page.
-- The audit uses the local `searchunit` binary when `searchunit --help` exits 0. `npx` runs when that binary is absent or `--help` does not exit 0. Empty stdout sets `cli: not used`: readiness is `not used`, and `robots.txt`, the sitemap, and `llms.txt` are `insufficient`.
-- After `audit-report.md` is saved, the agent reads the markdown back and fixes a missing heading or evidence line. The HTML page is a copy of the template with the CLI JSON and a prose file inserted. Fixed captions in the template are English. The report prose is the language the user is using in that session, and `<html lang>` is that language. The agent does not rewrite the page. When the machine has neither `open` nor `xdg-open`, the audit prints the path of `audit-report.html` and closes.
-- Sitemap locs decode XML entities, drop a non-http scheme, and omit userinfo. `urlsTruncated` is true when an index has more than three child sitemaps or a fetched child is itself an index. `seo-check` and `geo-check` still omit the URL and link lists, and they keep the truncation flags. A whitespace image `alt` is stored as an empty string. Hreflang, internal links, image URLs, and llms.txt links omit userinfo.
+### Security
 
-- `trustPages` matches a label on a whole URL path segment (`/sobre-nos`, `/contato`) or on the whole anchor text (`Sobre`). A headline that contains the word `sobre` no longer sets `trustPages.about`.
-- `links:anchor-text` warns on an anchor with no visible text, unless it has an `aria-label` or a non-empty image alt. The detail lists up to 20 hrefs, then `(+N more)`.
-- `effectiveRobotsDirective` keeps each robots token once, compared without case. A page that sends the same directives in meta and `X-Robots-Tag` no longer shows them twice.
-- `dates.visible` reads the first `<time>` inside `main`, `article`, or `[role=main]`, and falls back to the first `<time>` on the page. A sidebar date no longer feeds `content:date-sanity`.
-- Breaking for scores: `platform_signals.visible_dates` is also true when `dates.visible` exists. A page with only a visible `<time>` now gets the visible-dates points in platform optimization.
-- A page that is not the root and has `contentSignals.listingPattern` is `pageKind` `listing`, not `Undefined`. The root stays `home`.
-- Lighthouse reads `seo` and `best-practices` failed audits, and `failedAudits` entries have `category` and `items` (at most 10 rows with a URL or a DOM node). The LCP element audit is kept when Lighthouse names an element, with a null `score`.
-- `auditedPage.externalResources` lists the cross-origin origins of scripts, stylesheets, frames, images, fonts, media, and forms, plus inline script and style counts. `security:content-security-policy` names those origins when CSP is missing.
-- Links in `internalLinks` and `outboundLinks` have `ariaLabel` and `imgAlt`.
-- `structuredData.blocks[].recommendedMissing` lists the recommended props a block lacks. It does not change `hasRequiredProps`.
-- Breaking: `llmsTxt.issues` holds `{ code, line, text }` objects instead of strings. Syntax errors from `llms:syntax` now appear there with their line.
-- New findings `meta:og-image-hero` (an `og:image` that names a logo or icon, with a hero image on the page) and `content:hero-image` (a hero image that is lazy-loaded or lacks `fetchpriority="high"`). `images.items` has `fetchPriority`.
-
-- Fixed: `breadcrumbParent` takes the parent from the list order when the current page item has no `item` URL. It used to return the grandparent (for example the home page).
-
-- Fixed: `links:status` lists broken outbound links too when an internal link is also broken. The internal failure used to hide them.
-
-- FAQ detection (`contentSignals.hasFaqPattern`) also matches `Frequently asked questions`, `Preguntas frecuentes`, and `Questions fréquentes` in h2 and h3 headings, case-insensitive. Before, only `FAQ` and `Perguntas` matched. `structuredData.faqPairs` reads JSON-LD `Question` nodes and does not use headings, so it is unchanged.
-
-- Fixed: `contentSignals.hasTopSummary` skips a leading byline or date line (for example `Por Ana Souza, publicado em 10/03/2026.`) and reads the next paragraph. Before, a byline could count as the top summary. `citability.opening` still holds the first paragraph, byline included. `hasTopSummary` does not feed the score.
-
-- The audit skill's report checks now require one `Priority` line for each What Is Wrong and What To Improve item, reject a title that ends with a period, check that each phase orders Plan entries by impact and then effort, and accept `verify on production` in any case. The Limits section of the HTML report shows the no-ranking sentence, the method sentence, and the `Cuts:` line with its label.
-- Technical foundations shows `N/A` when no field CWV is available (no CrUX key, or no CrUX data). It no longer shows a partial number. The overall score is computed from the measured components.
-- A loopback target (`localhost`, `*.localhost`, `127.0.0.0/8`, `::1`) is not judged for HTTPS. Blocker `no_https` does not fire for it, and finding `discovery:https` says so.
-- Outbound links are counted, never requested. The audit probes only the first 25 same-site links, so a 403 from a bot on an external site no longer appears as a broken link.
-- robots.txt and llms.txt fetches retry twice on network errors, timeouts, 429, and 5xx. The payload carries the last error code (`robotsFetchError`, `llmsTxt.fetchError`), and the findings show it.
-- An FAQ heading earns the FAQ credit only with a question heading in the same page. FAQPage markup alone does not count.
-- A question heading needs a question form. `Why choose Acme` is no longer counted as a question.
-- `pageKey` keeps a non-default port (`localhost:8765` and `localhost:3000` are different pages). The default port is still dropped.
-- `citability.opening` and `hasTopSummary` skip a leading byline or date line, so a byline is not the answer.
+- Terminal, agent, and JSON output drop invisible format characters (Unicode Cf, Hangul fillers, variation selectors, and line separators). JSON output also drops C1 controls. The `gsc` and `config` tables drop control characters.
+- The audit skill treats site text as data. It never runs a command, opens a URL, or installs a tool because that text asks. Its validator accepts only SearchUnit read commands in `Verify:` and `## Re-audit`, and every quote must come from page text in the CLI payloads. The HTML report sets a Content Security Policy.
 
 ## 0.0.1-rc.1 - 2026-10-14
 
