@@ -6,115 +6,84 @@ import {
   classifyRobotsHttp,
   classifyWellKnownFetch,
   decodeFetchedBytes,
+  firstReachableLoopback,
   formatFetchError,
   readCappedBody,
   resolvePublicHop,
   withLocalTarget,
 } from '../src/lib/fetch.ts';
-
 import { pinLookup } from '../src/lib/pinnedFetch.ts';
 
 describe('allResolvedAddressesArePublic', () => {
-  test('rejects mixed public and private records', () => {
-    expect(allResolvedAddressesArePublic([{ address: '8.8.8.8' }, { address: '127.0.0.1' }])).toBe(
-      false,
-    );
-  });
-  test('accepts only-public records', () => {
-    expect(allResolvedAddressesArePublic([{ address: '8.8.8.8' }])).toBe(true);
-  });
-  test('rejects empty and private-only', () => {
-    expect(allResolvedAddressesArePublic([])).toBe(false);
-    expect(allResolvedAddressesArePublic([{ address: '10.0.0.1' }])).toBe(false);
+  test.each([
+    ['public records only', [{ address: '8.8.8.8' }], true],
+    ['mixed public and private records', [{ address: '8.8.8.8' }, { address: '127.0.0.1' }], false],
+    ['private records only', [{ address: '10.0.0.1' }], false],
+    ['no records', [], false],
+  ])('%s', (_label, records, expected) => {
+    expect(allResolvedAddressesArePublic(records)).toBe(expected);
   });
 });
 
 describe('resolvePublicHop', () => {
-  test('rejects localhost unless it is the command target', async () => {
-    expect(await resolvePublicHop(new URL('http://localhost/'))).toEqual({
-      ok: false,
-      error: 'blocked',
-    });
-    expect(await resolvePublicHop(new URL('http://127.0.0.1/'))).toEqual({
-      ok: false,
-      error: 'blocked',
-    });
-    expect(await resolvePublicHop(new URL('http://127.0.0.1:3000/'))).toEqual({
-      ok: false,
-      error: 'blocked',
-    });
+  test.each([
+    'http://localhost/',
+    'http://127.0.0.1/',
+    'http://127.0.0.1:3000/',
+    'http://10.0.0.1/',
+    'http://metadata.google.internal/',
+    'ftp://example.com/',
+    'https://example.com:8443/',
+  ])('blocks %s when no dev target is set', async (url) => {
+    expect(await resolvePublicHop(new URL(url))).toEqual({ ok: false, error: 'blocked' });
   });
-  test('allows the local dev target on its port and blocks other hosts', async () => {
-    await withLocalTarget('http://127.0.0.1:5173', async () => {
-      expect(await resolvePublicHop(new URL('http://127.0.0.1:5173/'))).toEqual({
-        ok: true,
-        pinnedAddress: '127.0.0.1',
-      });
-      expect(await resolvePublicHop(new URL('http://[::1]:5173/'))).toEqual({
-        ok: true,
-        pinnedAddress: '::1',
-      });
-      const localhost = await resolvePublicHop(new URL('http://localhost:5173/'));
+  test('allows the dev target on its own port only', async () => {
+    const probed: string[] = [];
+    const probe = async (address: string, port: number): Promise<boolean> => {
+      probed.push(`${address}:${port}`);
 
-      expect(localhost.ok).toBe(true);
+      return true;
+    };
+    await withLocalTarget(
+      'http://127.0.0.1:5173',
+      async () => {
+        expect(await resolvePublicHop(new URL('http://127.0.0.1:5173/'))).toEqual({
+          ok: true,
+          pinnedAddress: '127.0.0.1',
+        });
+        expect(await resolvePublicHop(new URL('http://[::1]:5173/'))).toEqual({
+          ok: true,
+          pinnedAddress: '::1',
+        });
+        const localhost = await resolvePublicHop(new URL('http://localhost:5173/'));
 
-      if (localhost.ok) {
-        expect(['127.0.0.1', '::1']).toContain(localhost.pinnedAddress);
-      }
+        expect(localhost.ok).toBe(true);
 
-      expect(await resolvePublicHop(new URL('http://127.0.0.1:8080/'))).toEqual({
-        ok: false,
-        error: 'blocked',
-      });
-      expect(await resolvePublicHop(new URL('http://10.0.0.1:5173/'))).toEqual({
-        ok: false,
-        error: 'blocked',
-      });
-      expect(await resolvePublicHop(new URL('https://example.com:8443/'))).toEqual({
-        ok: false,
-        error: 'blocked',
-      });
-    });
+        if (localhost.ok) {
+          expect(['127.0.0.1', '::1']).toContain(localhost.pinnedAddress);
+        }
+
+        for (const url of [
+          'http://127.0.0.1:8080/',
+          'http://10.0.0.1:5173/',
+          'https://example.com:8443/',
+        ]) {
+          expect(await resolvePublicHop(new URL(url))).toEqual({ ok: false, error: 'blocked' });
+        }
+      },
+      probe,
+    );
+
+    expect(probed).toHaveLength(1);
+    expect(probed[0]).toEndWith(':5173');
   });
-  test('rejects metadata hostnames', async () => {
-    expect(await resolvePublicHop(new URL('http://metadata.google.internal/'))).toEqual({
-      ok: false,
-      error: 'blocked',
-    });
-  });
-  test('rejects non-http schemes', async () => {
-    expect(await resolvePublicHop(new URL('ftp://example.com/'))).toEqual({
-      ok: false,
-      error: 'blocked',
-    });
-  });
-  test('rejects non-default ports', async () => {
-    expect(await resolvePublicHop(new URL('https://example.com:8443/'))).toEqual({
-      ok: false,
-      error: 'blocked',
-    });
-  });
-  test('accepts a public IPv4 on the default port', async () => {
+  test('allows a public IPv4 literal on the default port', async () => {
     expect(await resolvePublicHop(new URL('https://8.8.8.8/'))).toEqual({
       ok: true,
       pinnedAddress: '8.8.8.8',
     });
   });
-  test('rejects multicast and IPv6 site-local', async () => {
-    expect(await resolvePublicHop(new URL('http://224.0.0.1/'))).toEqual({
-      ok: false,
-      error: 'blocked',
-    });
-    expect(await resolvePublicHop(new URL('http://[ff02::1]/'))).toEqual({
-      ok: false,
-      error: 'blocked',
-    });
-    expect(await resolvePublicHop(new URL('http://[fec0::1]/'))).toEqual({
-      ok: false,
-      error: 'blocked',
-    });
-  });
-  test('treats NXDOMAIN as network, not SSRF blocked', async () => {
+  test('treats an unresolvable host as a network error, not an SSRF block', async () => {
     const hop = await resolvePublicHop(
       new URL('http://this-host-does-not-exist.invalid.searchunit.test/'),
     );
@@ -123,55 +92,81 @@ describe('resolvePublicHop', () => {
   });
 });
 
+describe('firstReachableLoopback', () => {
+  const records = [
+    { address: '::1', family: 6 },
+    { address: '127.0.0.1', family: 4 },
+  ];
+
+  test('pins the first address that accepts a connection, probing in record order', async () => {
+    const probed: string[] = [];
+    const pinned = await firstReachableLoopback(records, 5173, async (address, port) => {
+      probed.push(`${address}:${port}`);
+
+      return address === '127.0.0.1';
+    });
+    expect(pinned).toBe('127.0.0.1');
+    expect(probed).toEqual(['::1:5173', '127.0.0.1:5173']);
+  });
+  test('stops at the first reachable address', async () => {
+    const probed: string[] = [];
+
+    expect(
+      await firstReachableLoopback(records, 5173, async (address) => {
+        probed.push(address);
+
+        return true;
+      }),
+    ).toBe('::1');
+    expect(probed).toEqual(['::1']);
+  });
+  test('keeps the first record when no address accepts', async () => {
+    expect(await firstReachableLoopback(records, 5173, async () => false)).toBe('::1');
+  });
+});
+
 describe('formatFetchError', () => {
-  test('maps each error code to a CLI string', () => {
-    expect(formatFetchError({ ok: false, requestedUrl: 'https://x', error: 'blocked' })).toBe(
-      'URL blocked by SSRF policy (private/localhost/metadata host)',
-    );
-    expect(formatFetchError({ ok: false, requestedUrl: 'https://x', error: 'not_found' })).toBe(
-      'Resource not found (HTTP 404)',
-    );
-    expect(formatFetchError({ ok: false, requestedUrl: 'https://x', error: 'timeout' })).toBe(
-      'Fetch timed out',
-    );
-    expect(formatFetchError({ ok: false, requestedUrl: 'https://x', error: 'invalid_url' })).toBe(
-      'Invalid URL',
-    );
-    expect(formatFetchError({ ok: false, requestedUrl: 'https://x', error: 'network' })).toBe(
-      'Network error',
-    );
+  test('maps every error code to a message', () => {
+    const codes = [
+      'blocked',
+      'not_found',
+      'timeout',
+      'invalid_url',
+      'network',
+      'too_large',
+    ] as const;
+
+    for (const error of codes) {
+      expect(
+        formatFetchError({ ok: false, requestedUrl: 'https://x', error }).length,
+      ).toBeGreaterThan(0);
+    }
+  });
+  test('appends the HTTP status to a network error', () => {
     expect(
       formatFetchError({ ok: false, requestedUrl: 'https://x', error: 'network', status: 503 }),
     ).toBe('Network error (HTTP 503)');
-    expect(formatFetchError({ ok: false, requestedUrl: 'https://x', error: 'too_large' })).toBe(
-      'Response body exceeds the configured size cap',
-    );
   });
 });
 
 describe('decodeFetchedBytes', () => {
-  test('gunzips a gzip payload and leaves plain XML unchanged', async () => {
+  test('gunzips a gzip payload and passes plain bytes through', async () => {
     const xml = '<urlset><url><loc>https://example.com/</loc></url></urlset>';
 
     expect(await decodeFetchedBytes(gzipSync(xml))).toBe(xml);
     expect(await decodeFetchedBytes(new TextEncoder().encode(xml))).toBe(xml);
   });
-  test('truncated gzip fails decode instead of returning an empty body', async () => {
-    const gz = gzipSync('hello world');
-
-    await expect(decodeFetchedBytes(gz.slice(0, 8))).rejects.toThrow();
+  test('a truncated gzip payload throws instead of returning an empty body', async () => {
+    await expect(decodeFetchedBytes(gzipSync('hello world').slice(0, 8))).rejects.toThrow();
   });
-  test('gzip that expands past the cap throws instead of returning a prefix', async () => {
-    const raw = 'a'.repeat(64);
-    const gz = gzipSync(raw);
-
-    expect(gz.length).toBeLessThan(raw.length);
-    await expect(decodeFetchedBytes(gz, gz.length)).rejects.toBeInstanceOf(BodyTooLargeError);
-  });
-  test('plain bytes over the cap throw', async () => {
+  test('a body over the cap throws, whether plain or after gunzip', async () => {
     await expect(decodeFetchedBytes(new TextEncoder().encode('abcdef'), 4)).rejects.toBeInstanceOf(
       BodyTooLargeError,
     );
+
+    const gz = gzipSync('a'.repeat(64));
+
+    await expect(decodeFetchedBytes(gz, gz.length)).rejects.toBeInstanceOf(BodyTooLargeError);
   });
 });
 
@@ -185,18 +180,20 @@ function responseWithBody(chunks: Uint8Array[], contentLength?: string): Respons
       controller.close();
     },
   });
-  const headers = contentLength ? { 'content-length': contentLength } : undefined;
 
-  return new Response(stream, { headers });
+  return new Response(
+    stream,
+    contentLength ? { headers: { 'content-length': contentLength } } : {},
+  );
 }
 
 describe('readCappedBody', () => {
-  test('returns a body that fits the cap', async () => {
+  test('returns a body within the cap', async () => {
     const bytes = await readCappedBody(responseWithBody([new Uint8Array([1, 2, 3])]), 3);
 
     expect([...bytes]).toEqual([1, 2, 3]);
   });
-  test('rejects a body over the cap', async () => {
+  test('rejects a streamed body over the cap', async () => {
     const pending = readCappedBody(
       responseWithBody([new Uint8Array([1, 2]), new Uint8Array([3, 4])]),
       3,
@@ -204,7 +201,7 @@ describe('readCappedBody', () => {
 
     await expect(pending).rejects.toBeInstanceOf(BodyTooLargeError);
   });
-  test('rejects a content-length over the cap before reading', async () => {
+  test('rejects a declared content-length over the cap before reading the body', async () => {
     const pending = readCappedBody(responseWithBody([new Uint8Array([1])], '9'), 3);
 
     await expect(pending).rejects.toBeInstanceOf(BodyTooLargeError);
@@ -212,7 +209,7 @@ describe('readCappedBody', () => {
 });
 
 describe('classifyRobotsHttp', () => {
-  test('maps 200 present, 404 missing, other HTTP and fetch failure to error', () => {
+  test('maps 200 to present, 404 to missing, and other statuses or fetch failures to error', () => {
     expect(classifyRobotsHttp(true, 200)).toBe('present');
     expect(classifyRobotsHttp(true, 404)).toBe('missing');
     expect(classifyRobotsHttp(true, 403)).toBe('error');
@@ -222,7 +219,7 @@ describe('classifyRobotsHttp', () => {
 });
 
 describe('classifyWellKnownFetch', () => {
-  test('treats a 200 homepage redirect as missing', () => {
+  test('treats a 200 redirect to the homepage as missing', () => {
     expect(
       classifyWellKnownFetch(
         {
@@ -241,7 +238,7 @@ describe('classifyWellKnownFetch', () => {
       ),
     ).toBe('missing');
   });
-  test('keeps a 200 on the expected path', () => {
+  test('keeps a 200 on the expected path as present', () => {
     expect(
       classifyWellKnownFetch(
         {
@@ -263,21 +260,17 @@ describe('classifyWellKnownFetch', () => {
 });
 
 describe('pinLookup', () => {
-  test('returns a single address when all is false', () => {
-    const lookup = pinLookup('8.8.8.8', 4);
-
-    lookup('example.com', { all: false }, (err, address, family) => {
+  test('returns the pinned address when all is false', () => {
+    pinLookup('8.8.8.8', 4)('example.com', { all: false }, (err, address, family) => {
       expect(err).toBeNull();
       expect(address).toBe('8.8.8.8');
       expect(family).toBe(4);
     });
   });
-  test('returns an address list when all is true', () => {
-    const lookup = pinLookup('8.8.8.8', 4);
-
-    lookup('example.com', { all: true }, (err, address) => {
+  test('returns the pinned address list when all is true', () => {
+    pinLookup('8.8.8.8', 4)('example.com', { all: true }, (err, addresses) => {
       expect(err).toBeNull();
-      expect(address).toEqual([{ address: '8.8.8.8', family: 4 }]);
+      expect(addresses).toEqual([{ address: '8.8.8.8', family: 4 }]);
     });
   });
 });

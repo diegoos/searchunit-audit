@@ -1,15 +1,17 @@
 import { lookup } from 'node:dns/promises';
 import type { LookupAddress } from 'node:dns';
 import { AsyncLocalStorage } from 'node:async_hooks';
-import { isIP } from 'node:net';
+import { connect, isIP } from 'node:net';
 import { gunzipSync } from 'node:zlib';
 import pkg from '../../package.json' with { type: 'json' };
 import {
   isBlockedHostname,
   isBlockedIpString,
+  isLoopbackHost,
   isLoopbackHostname,
   isLoopbackIpString,
 } from '../ip-policy.ts';
+import { CliError } from './errors.ts';
 import { DEFAULT_MAX_BODY_BYTES, parseMaxBodyBytes } from './maxBodyBytes.ts';
 import { pinnedFetch } from './pinnedFetch.ts';
 import { normalizeUrl, stripUserinfo } from './url.ts';
@@ -93,8 +95,15 @@ export const DISCOVERY_PAGE_TIMEOUT_MS = PAGE_TIMEOUT_MS;
 const MAX_REDIRECTS = 5;
 const ALLOWED_PORTS = new Set(['', '80', '443']);
 
+type ConnectProbe = (address: string, port: number) => Promise<boolean>;
+
+interface LocalScope {
+  port: string;
+  canConnect: ConnectProbe;
+}
+
 /** Port of the command target when that target is loopback. Null keeps loopback blocked. */
-const localTargetScope = new AsyncLocalStorage<string | null>();
+const localTargetScope = new AsyncLocalStorage<LocalScope | null>();
 
 function numericPort(url: URL): string {
   if (url.port) {
@@ -104,6 +113,11 @@ function numericPort(url: URL): string {
   return url.protocol === 'https:' ? '443' : '80';
 }
 
+/** Hostname without the brackets WHATWG URL keeps around an IPv6 literal. */
+function unbracketedHostname(url: URL): string {
+  return url.hostname.replace(/^\[|\]$/g, '');
+}
+
 function loopbackPort(target: string | undefined): string | null {
   if (!target?.trim()) {
     return null;
@@ -111,9 +125,8 @@ function loopbackPort(target: string | undefined): string | null {
 
   try {
     const url = stripUserinfo(new URL(normalizeUrl(target)));
-    const hostname = url.hostname.replace(/^\[|\]$/g, '');
 
-    if (!isLoopbackHostname(hostname) && !isLoopbackIpString(hostname)) {
+    if (!isLoopbackHost(url.hostname)) {
       return null;
     }
 
@@ -125,10 +138,17 @@ function loopbackPort(target: string | undefined): string | null {
 
 /**
  * Runs `fn` with loopback fetches allowed on the same port as `target`.
- * A public target, or no target, leaves loopback blocked.
+ * A public target, or no target, leaves loopback blocked. `canConnect` picks
+ * the loopback address that accepts a connection on that port.
  */
-export function withLocalTarget<T>(target: string | undefined, fn: () => Promise<T>): Promise<T> {
-  return localTargetScope.run(loopbackPort(target), fn);
+export function withLocalTarget<T>(
+  target: string | undefined,
+  fn: () => Promise<T>,
+  canConnect: ConnectProbe = tcpConnects,
+): Promise<T> {
+  const port = loopbackPort(target);
+
+  return localTargetScope.run(port ? { port, canConnect } : null, fn);
 }
 
 export const REDIRECT_STATUSES = new Set([301, 302, 303, 307, 308]);
@@ -191,18 +211,97 @@ async function lookupAll(hostname: string, signal?: AbortSignal): Promise<Lookup
   });
 }
 
+/** Picks the pinned address from an accepted record set. Undefined means none. */
+type AddressChooser = (records: readonly LookupAddress[]) => Promise<string | undefined>;
+
+async function firstRecordAddress(records: readonly LookupAddress[]): Promise<string | undefined> {
+  return records[0]?.address;
+}
+
+/**
+ * Pins the address `choose` picks when `accepts` approves the whole record set.
+ * A rejected set is blocked. A lookup error (other than abort) is a network failure.
+ */
+async function pinResolvedAddress(
+  hostname: string,
+  signal: AbortSignal | undefined,
+  accepts: (records: readonly LookupAddress[]) => boolean,
+  choose: AddressChooser = firstRecordAddress,
+): Promise<HopResolve> {
+  try {
+    const records = await lookupAll(hostname, signal);
+
+    if (!accepts(records)) {
+      return { ok: false, error: 'blocked' };
+    }
+
+    const pinnedAddress = await choose(records);
+
+    if (!pinnedAddress) {
+      return { ok: false, error: 'network' };
+    }
+
+    return { ok: true, pinnedAddress };
+  } catch (err) {
+    if (err instanceof Error && err.name === 'AbortError') {
+      throw err;
+    }
+
+    return { ok: false, error: 'network' };
+  }
+}
+
+/** True when there is at least one record and every record is loopback. */
+function allLoopbackAddresses(records: readonly LookupAddress[]): boolean {
+  return records.length > 0 && records.every((record) => isLoopbackIpString(record.address));
+}
+
+const LOOPBACK_PROBE_TIMEOUT_MS = 300;
+
+/** TCP connect test for one address. Closes the socket at once and sends no bytes. */
+function tcpConnects(address: string, port: number): Promise<boolean> {
+  return new Promise((resolve) => {
+    const socket = connect({ host: address, port });
+    const finish = (reachable: boolean): void => {
+      socket.destroy();
+      resolve(reachable);
+    };
+    socket.setTimeout(LOOPBACK_PROBE_TIMEOUT_MS, () => finish(false));
+    socket.once('connect', () => finish(true));
+    socket.once('error', () => finish(false));
+  });
+}
+
+/**
+ * First record, in lookup order, whose address accepts a TCP connect on `port`.
+ * Nothing accepts: the first record, so the fetch fails as it did before the probe.
+ */
+export async function firstReachableLoopback(
+  records: readonly LookupAddress[],
+  port: number,
+  canConnect: ConnectProbe = tcpConnects,
+): Promise<string | undefined> {
+  for (const record of records) {
+    if (await canConnect(record.address, port)) {
+      return record.address;
+    }
+  }
+
+  return records[0]?.address;
+}
+
 /**
  * Loopback hop for a local dev target. Null means the public SSRF checks decide.
  * A loopback name that does not resolve to loopback is blocked.
  */
 async function resolveLoopbackHop(url: URL, signal?: AbortSignal): Promise<HopResolve | null> {
-  const allowedPort = localTargetScope.getStore();
+  const local = localTargetScope.getStore();
 
-  if (!allowedPort || numericPort(url) !== allowedPort) {
+  if (!local || numericPort(url) !== local.port) {
     return null;
   }
 
-  const hostname = url.hostname.replace(/^\[|\]$/g, '');
+  const hostname = unbracketedHostname(url);
 
   if (isIP(hostname)) {
     if (!isLoopbackIpString(hostname)) {
@@ -216,27 +315,11 @@ async function resolveLoopbackHop(url: URL, signal?: AbortSignal): Promise<HopRe
     return null;
   }
 
-  try {
-    const records = await lookupAll(hostname, signal);
+  const port = Number(local.port);
 
-    if (records.length === 0 || records.some((record) => !isLoopbackIpString(record.address))) {
-      return { ok: false, error: 'blocked' };
-    }
-
-    const first = records[0];
-
-    if (!first) {
-      return { ok: false, error: 'network' };
-    }
-
-    return { ok: true, pinnedAddress: first.address };
-  } catch (err) {
-    if (err instanceof Error && err.name === 'AbortError') {
-      throw err;
-    }
-
-    return { ok: false, error: 'network' };
-  }
+  return pinResolvedAddress(hostname, signal, allLoopbackAddresses, (records) =>
+    firstReachableLoopback(records, port, local.canConnect),
+  );
 }
 
 /**
@@ -259,7 +342,7 @@ export async function resolvePublicHop(url: URL, signal?: AbortSignal): Promise<
     return { ok: false, error: 'blocked' };
   }
 
-  const hostname = url.hostname.replace(/^\[|\]$/g, '');
+  const hostname = unbracketedHostname(url);
 
   if (isBlockedHostname(url.hostname) || isBlockedHostname(hostname)) {
     return { ok: false, error: 'blocked' };
@@ -273,27 +356,7 @@ export async function resolvePublicHop(url: URL, signal?: AbortSignal): Promise<
     return { ok: true, pinnedAddress: hostname };
   }
 
-  try {
-    const records = await lookupAll(hostname, signal);
-
-    if (!allResolvedAddressesArePublic(records)) {
-      return { ok: false, error: 'blocked' };
-    }
-
-    const first = records[0];
-
-    if (!first) {
-      return { ok: false, error: 'network' };
-    }
-
-    return { ok: true, pinnedAddress: first.address };
-  } catch (err) {
-    if (err instanceof Error && err.name === 'AbortError') {
-      throw err;
-    }
-
-    return { ok: false, error: 'network' };
-  }
+  return pinResolvedAddress(hostname, signal, allResolvedAddressesArePublic);
 }
 
 const GZIP_MAGIC_0 = 0x1f;
@@ -388,11 +451,7 @@ function contentLength(response: Response): number | undefined {
 
   const value = Number(raw);
 
-  if (!Number.isFinite(value)) {
-    return undefined;
-  }
-
-  return value;
+  return Number.isFinite(value) ? value : undefined;
 }
 
 /** Reads the full body. Throws {@link BodyTooLargeError} when it is over `maxBytes`. */
@@ -466,7 +525,6 @@ async function maybeReadBody(
 }
 
 /** Lowercases all response header names for analyzer compatibility. */
-
 function collectHeaders(response: Response): Record<string, string> {
   const headers: Record<string, string> = {};
 
@@ -477,9 +535,6 @@ function collectHeaders(response: Response): Record<string, string> {
   return headers;
 }
 
-/**
- * Fetches a public http(s) URL with SSRF checks on every redirect hop.
- */
 /** Tries per fetch: the first try plus two retries on transient failures. */
 const FETCH_ATTEMPTS = 3;
 const RETRY_DELAY_MS = 200;
@@ -516,6 +571,7 @@ export async function fetchPublicUrlWithAttempts(
   return { outcome, attempts };
 }
 
+/** Fetches a public http(s) URL with SSRF checks on every redirect hop. Retries transient failures. */
 export async function fetchPublicUrl(
   requestedUrl: string,
   options: FetchOptions = {},
@@ -530,6 +586,67 @@ export function fetchErrorCode(outcome: FetchOutcome): string | null {
   }
 
   return outcome.status >= 400 ? `http_${outcome.status}` : null;
+}
+
+type RedirectOutcome =
+  | { ok: true; response: Response; current: URL }
+  | { ok: false; error: FetchErrorCode };
+
+/**
+ * Sends the request and follows redirects. Every hop passes `resolvePublicHop`
+ * and is pinned to its own address. Each hop URL is appended to `redirectChain`.
+ */
+async function fetchAlongRedirects(
+  first: URL,
+  firstAddress: string,
+  request: { headers: Record<string, string>; signal: AbortSignal },
+  redirectChain: string[],
+): Promise<RedirectOutcome> {
+  let current = first;
+  let pinnedAddress = firstAddress;
+
+  for (let hop = 0; ; hop++) {
+    const response = await pinnedFetch(current.href, pinnedAddress, {
+      signal: request.signal,
+      headers: request.headers,
+      redirect: 'manual',
+    });
+    if (!REDIRECT_STATUSES.has(response.status)) {
+      return { ok: true, response, current };
+    }
+
+    const location = response.headers.get('location');
+
+    if (!location) {
+      return { ok: true, response, current };
+    }
+
+    if (hop >= MAX_REDIRECTS) {
+      await discardResponseBody(response);
+
+      return { ok: false, error: 'network' };
+    }
+
+    await discardResponseBody(response);
+
+    let next: URL;
+
+    try {
+      next = stripUserinfo(new URL(location, current.href));
+    } catch {
+      return { ok: false, error: 'network' };
+    }
+
+    const nextHop = await resolvePublicHop(next, request.signal);
+
+    if (!nextHop.ok) {
+      return { ok: false, error: nextHop.error };
+    }
+
+    current = next;
+    pinnedAddress = nextHop.pinnedAddress;
+    redirectChain.push(current.href);
+  }
 }
 
 async function fetchPublicUrlOnce(
@@ -549,7 +666,6 @@ async function fetchPublicUrlOnce(
   const timer = setTimeout(() => controller.abort(), options.timeoutMs ?? DEFAULT_TIMEOUT_MS);
   const startedAt = Date.now();
   const redirectChain: string[] = [parsed.href];
-  const headers = requestHeaders(options);
 
   try {
     const firstHop = await resolvePublicHop(parsed, controller.signal);
@@ -558,53 +674,18 @@ async function fetchPublicUrlOnce(
       return { ok: false, requestedUrl: safeUrl, error: firstHop.error };
     }
 
-    let current = parsed;
-    let pinnedAddress = firstHop.pinnedAddress;
-    let response: Response;
+    const followed = await fetchAlongRedirects(
+      parsed,
+      firstHop.pinnedAddress,
+      { headers: requestHeaders(options), signal: controller.signal },
+      redirectChain,
+    );
 
-    for (let hop = 0; ; hop++) {
-      response = await pinnedFetch(current.href, pinnedAddress, {
-        signal: controller.signal,
-        headers,
-        redirect: 'manual',
-      });
-      if (!REDIRECT_STATUSES.has(response.status)) {
-        break;
-      }
-
-      const location = response.headers.get('location');
-
-      if (!location) {
-        break;
-      }
-
-      if (hop >= MAX_REDIRECTS) {
-        await discardResponseBody(response);
-
-        return { ok: false, requestedUrl: safeUrl, error: 'network' };
-      }
-
-      await discardResponseBody(response);
-
-      let next: URL;
-
-      try {
-        next = stripUserinfo(new URL(location, current.href));
-      } catch {
-        return { ok: false, requestedUrl: safeUrl, error: 'network' };
-      }
-
-      const nextHop = await resolvePublicHop(next, controller.signal);
-
-      if (!nextHop.ok) {
-        return { ok: false, requestedUrl: safeUrl, error: nextHop.error };
-      }
-
-      current = next;
-      pinnedAddress = nextHop.pinnedAddress;
-      redirectChain.push(current.href);
+    if (!followed.ok) {
+      return { ok: false, requestedUrl: safeUrl, error: followed.error };
     }
 
+    const { response, current } = followed;
     const status = response.status;
 
     if (!options.allowHttpErrors) {
@@ -649,6 +730,33 @@ async function fetchPublicUrlOnce(
   } finally {
     clearTimeout(timer);
   }
+}
+
+/**
+ * Throws a CliError when policy refused the URL (blocked host or invalid URL).
+ * Other failures, such as a 404 or a network error, pass through for the caller to read.
+ */
+export function throwIfRefusedFetch(outcome: FetchOutcome): void {
+  if (outcome.ok) {
+    return;
+  }
+
+  if (outcome.error !== 'blocked' && outcome.error !== 'invalid_url') {
+    return;
+  }
+
+  throw new CliError(formatFetchError(outcome));
+}
+
+/** Fetches a page and throws a CliError with the failure text when it is not usable. */
+export async function fetchPageOrThrow(url: string): Promise<FetchedPage> {
+  const page = await fetchPublicUrl(url);
+
+  if (!page.ok) {
+    throw new CliError(formatFetchError(page));
+  }
+
+  return page;
 }
 
 /** Maps a fetch failure to a short CLI error string. */

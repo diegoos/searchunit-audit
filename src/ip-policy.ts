@@ -2,27 +2,16 @@ import ipaddr from 'ipaddr.js';
 
 const BLOCKED_IP_RANGES = new Set([
   'unspecified',
-
   'loopback',
-
   'private',
-
   'linkLocal',
-
   'uniqueLocal',
-
   'broadcast',
-
   'carrierGradeNat',
-
   'reserved',
-
   'rfc6052',
-
   'rfc6145',
-
   'multicast',
-
   'deprecatedSiteLocal',
 ]);
 
@@ -68,6 +57,11 @@ export function isLoopbackIpString(ip: string): boolean {
   }
 
   return ipaddr.process(normalized).range() === 'loopback';
+}
+
+/** True for localhost, *.localhost, 127.0.0.0/8, and ::1. */
+export function isLoopbackHost(hostname: string): boolean {
+  return isLoopbackHostname(hostname) || isLoopbackIpString(hostname);
 }
 
 /** True when the address must not be fetched. Invalid input fails closed. */

@@ -1,13 +1,10 @@
-import { isLoopbackHostname, isLoopbackIpString } from '../ip-policy.ts';
+import { isLoopbackHost } from '../ip-policy.ts';
 
 const DEFAULT_SCHEME = 'https://';
 
 function isLoopbackInput(input: string): boolean {
   try {
-    const url = new URL(`http://${input}`);
-    const hostname = url.hostname.replace(/^\[|\]$/g, '');
-
-    return isLoopbackHostname(hostname) || isLoopbackIpString(hostname);
+    return isLoopbackHost(new URL(`http://${input}`).hostname);
   } catch {
     return false;
   }

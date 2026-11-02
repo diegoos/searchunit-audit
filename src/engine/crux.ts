@@ -5,7 +5,7 @@ import {
   readCappedBody,
   resolvePublicHop,
 } from '../lib/fetch.ts';
-import { isLoopbackHostname, isLoopbackIpString } from '../ip-policy.ts';
+import { isLocalTarget } from './localTarget.ts';
 import { pinnedFetch } from '../lib/pinnedFetch.ts';
 
 const CRUX_ENDPOINT = 'https://chromeuxreport.googleapis.com/v1/records:queryRecord';
@@ -32,15 +32,15 @@ const CORE_VITALS = new Set([
 
 const FRACTION_METRICS = new Set(['form_factors', 'navigation_types']);
 
-function isLoopbackUrl(raw: string): boolean {
-  try {
-    const hostname = new URL(raw).hostname.replace(/^\[|\]$/g, '');
+/** CrUX origin key: scheme and host with port, no path. */
+function originOf(url: string): string {
+  const parsed = new URL(url);
 
-    return isLoopbackHostname(hostname) || isLoopbackIpString(hostname);
-  } catch {
-    return false;
-  }
+  return `${parsed.protocol}//${parsed.host}`;
 }
+
+/** URLs queried per batch; each URL costs two CrUX calls (page and origin). */
+const CRUX_CONCURRENCY = 5;
 
 function rateMetric(metricName: string, p75: unknown): string {
   const thresholds = METRIC_THRESHOLDS[metricName];
@@ -101,6 +101,7 @@ function parseCruxPayload(payload: Record<string, unknown> | null): CruxParsedRe
   const cwvRatings = [...CORE_VITALS]
     .filter((name) => name in metrics)
     .map((name) => metrics[name]?.rating);
+
   return {
     cwv_pass: cwvRatings.length > 0 ? cwvRatings.every((r) => r === 'good') : null,
     metrics,
@@ -176,7 +177,7 @@ async function queryCrux(
  * Queries CrUX when `CRUX_API_KEY` is set. Missing data is skipped, not a failure.
  */
 export async function fetchCruxResults(urls: string[]): Promise<CruxFetchResult> {
-  const deduped = [...new Set(urls.filter((url) => Boolean(url) && !isLoopbackUrl(url)))];
+  const deduped = [...new Set(urls.filter((url) => Boolean(url) && !isLocalTarget(url)))];
   const apiKey = process.env.CRUX_API_KEY?.trim();
 
   if (!apiKey) {
@@ -192,14 +193,12 @@ export async function fetchCruxResults(urls: string[]): Promise<CruxFetchResult>
   }
 
   const responses: Awaited<ReturnType<typeof queryCrux>>[] = [];
-  const CONCURRENCY = 5;
 
-  for (let i = 0; i < deduped.length; i += CONCURRENCY) {
-    const batch = deduped.slice(i, i + CONCURRENCY);
+  for (let i = 0; i < deduped.length; i += CRUX_CONCURRENCY) {
+    const batch = deduped.slice(i, i + CRUX_CONCURRENCY);
     const batchResponses = await Promise.all(
       batch.map(async (url) => {
-        const parsed = new URL(url);
-        const origin = `${parsed.protocol}//${parsed.host}`;
+        const origin = originOf(url);
 
         return Promise.all([queryCrux(apiKey, { url }), queryCrux(apiKey, { origin })]);
       }),
@@ -212,8 +211,7 @@ export async function fetchCruxResults(urls: string[]): Promise<CruxFetchResult>
 
   for (let index = 0; index < deduped.length; index++) {
     const url = deduped[index]!;
-    const parsed = new URL(url);
-    const origin = `${parsed.protocol}//${parsed.host}`;
+    const origin = originOf(url);
     const urlResponse = responses[index * 2]!;
     const originResponse = responses[index * 2 + 1]!;
 
