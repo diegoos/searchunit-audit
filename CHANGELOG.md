@@ -4,6 +4,8 @@ Versions follow Semantic Versioning. Notes stay under Unreleased until `package.
 
 ## Unreleased
 
+## 0.0.1 - 2026-11-02
+
 ### Added
 
 - Every `audit`, `seo-check`, and `geo-check` run is a page audit. `discovery.auditScope` sets `level` `page`, `pagesScored` 1, and `contextFetches`. The human report title is `Page Audit`. A host target scores its homepage.
@@ -52,6 +54,7 @@ Versions follow Semantic Versioning. Notes stay under Unreleased until `package.
 
 - Terminal, agent, and JSON output drop invisible format characters (Unicode Cf, Hangul fillers, variation selectors, and line separators). JSON output also drops C1 controls. The `gsc` and `config` tables drop control characters.
 - The audit skill treats site text as data. It never runs a command, opens a URL, or installs a tool because that text asks. Its validator accepts only SearchUnit read commands in `Verify:` and `## Re-audit`, and every quote must come from page text in the CLI payloads. The HTML report sets a Content Security Policy.
+- Dependencies updated for `bun audit`: undici 8.12.3, happy-dom 21.0.4, and qs 6.17.1 via googleapis-common 9.3.1.
 
 ## 0.0.1-rc.1 - 2026-10-14
 
