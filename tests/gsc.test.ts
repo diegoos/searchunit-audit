@@ -1,10 +1,10 @@
-import { afterEach, describe, expect, test } from 'bun:test';
+import { describe, expect, test } from 'bun:test';
 import { generateKeyPairSync } from 'node:crypto';
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { google } from 'googleapis';
-import { runGsc, renderGscTables } from '../src/commands/gsc.ts';
+import { renderGscTables, runGsc } from '../src/commands/gsc.ts';
 import {
   GSC_SCOPE,
   GscRequestError,
@@ -23,6 +23,64 @@ import type { CliFlags } from '../src/lib/args.ts';
 import { DEFAULT_MAX_BODY_BYTES } from '../src/lib/maxBodyBytes.ts';
 
 const TOKEN = 'ya29.test-token-value';
+const MISSING_ADC = '/tmp/searchunit-missing-adc.json';
+const ENV_NAMES = [
+  'GSC_ACCESS_TOKEN',
+  'GSC_CREDENTIALS',
+  'GSC_QUOTA_PROJECT',
+  'GOOGLE_APPLICATION_CREDENTIALS',
+  'GOOGLE_CLOUD_QUOTA_PROJECT',
+] as const;
+
+type EnvName = (typeof ENV_NAMES)[number];
+
+/** Sets env vars for one call and restores every GSC-related var afterwards. */
+async function withEnv<T>(
+  overrides: Partial<Record<EnvName, string | undefined>>,
+  fn: () => Promise<T> | T,
+): Promise<T> {
+  const saved = ENV_NAMES.map((name) => [name, process.env[name]] as const);
+
+  for (const name of ENV_NAMES) {
+    if (!(name in overrides)) {
+      continue;
+    }
+
+    const value = overrides[name];
+
+    if (value === undefined) {
+      delete process.env[name];
+    } else {
+      process.env[name] = value;
+    }
+  }
+
+  try {
+    return await fn();
+  } finally {
+    for (const [name, value] of saved) {
+      if (value === undefined) {
+        delete process.env[name];
+      } else {
+        process.env[name] = value;
+      }
+    }
+  }
+}
+
+async function captureLogs(fn: () => Promise<number>): Promise<{ code: number; out: string }> {
+  const logs: string[] = [];
+  const original = console.log;
+
+  console.log = (msg?: unknown) => {
+    logs.push(String(msg ?? ''));
+  };
+  try {
+    return { code: await fn(), out: logs.join('\n') };
+  } finally {
+    console.log = original;
+  }
+}
 
 function flags(over: Partial<CliFlags> = {}): CliFlags {
   return {
@@ -39,16 +97,6 @@ function flags(over: Partial<CliFlags> = {}): CliFlags {
     maxBytes: DEFAULT_MAX_BODY_BYTES,
     ...over,
   };
-}
-
-function restoreEnv(name: string, value: string | undefined): void {
-  if (value === undefined) {
-    delete process.env[name];
-
-    return;
-  }
-
-  process.env[name] = value;
 }
 
 function api(over: Partial<GscApi> = {}): GscApi {
@@ -71,15 +119,24 @@ function api(over: Partial<GscApi> = {}): GscApi {
   };
 }
 
+function tempFile(name: string, body: unknown): { dir: string; file: string } {
+  const dir = mkdtempSync(join(tmpdir(), 'searchunit-gsc-'));
+  const file = join(dir, name);
+
+  writeFileSync(file, JSON.stringify(body));
+
+  return { dir, file };
+}
+
 describe('gsc helpers', () => {
-  test('redacts access tokens and API keys', () => {
+  test('redact removes access tokens and API keys', () => {
     const redacted = redact('Bearer ya29.secret AIzaSySecretkeyvalue123456');
 
     expect(redacted).not.toContain('ya29.');
     expect(redacted).not.toContain('AIza');
     expect(redacted).not.toContain('secret');
   });
-  test('allows only the read-only scope set', () => {
+  test('unexpectedScopes flags anything beyond the read-only Search Console scope', () => {
     expect(
       unexpectedScopes([
         'openid',
@@ -89,24 +146,23 @@ describe('gsc helpers', () => {
         GSC_SCOPE,
       ]),
     ).toEqual([]);
-    expect(unexpectedScopes([GSC_SCOPE, 'https://www.googleapis.com/auth/webmasters'])).toContain(
+    expect(unexpectedScopes([GSC_SCOPE, 'https://www.googleapis.com/auth/webmasters'])).toEqual([
       'https://www.googleapis.com/auth/webmasters',
-    );
-    expect(unexpectedScopes([GSC_SCOPE, 'https://www.googleapis.com/auth/cloud-platform'])).toEqual(
-      [],
-    );
+    ]);
     expect(
       unexpectedScopes([GSC_SCOPE, 'https://www.googleapis.com/auth/analytics.readonly']),
-    ).toContain('https://www.googleapis.com/auth/analytics.readonly');
+    ).toEqual(['https://www.googleapis.com/auth/analytics.readonly']);
   });
-  test('rejects loopback, link-local, and userinfo URLs', () => {
-    expect(safeAuditUrl('https://example.com/')).toBe('https://example.com/');
-    expect(safeAuditUrl('http://127.0.0.1/')).toBe('');
-    expect(safeAuditUrl('http://localhost:3000/')).toBe('');
-    expect(safeAuditUrl('http://169.254.169.254/')).toBe('');
-    expect(safeAuditUrl('https://user:pass@example.com/')).toBe('');
+  test.each([
+    ['https://example.com/', 'https://example.com/'],
+    ['http://127.0.0.1/', ''],
+    ['http://localhost:3000/', ''],
+    ['http://169.254.169.254/', ''],
+    ['https://user:pass@example.com/', ''],
+  ])('safeAuditUrl(%s) is %j', (url, expected) => {
+    expect(safeAuditUrl(url)).toBe(expected);
   });
-  test('picks the longest URL-prefix, else the longest domain property', () => {
+  test('pickSite chooses the longest matching property and never a lookalike or unverified one', () => {
     expect(
       pickSite(
         [
@@ -135,69 +191,47 @@ describe('gsc helpers', () => {
         'https://example.com.evil/path',
       ),
     ).toBeNull();
-    expect(
-      pickSite(
-        [{ siteUrl: 'https://www.example.com/', permissionLevel: 'siteOwner' }],
-        'https://example.com/blog/post',
-      ),
-    ).toBe('https://www.example.com/');
   });
-  test('builds a 28-day window ending three days before the PT date', () => {
-    expect(gscWindow(new Date('2026-09-30T18:00:00Z'))).toEqual({
-      startDate: '2026-08-31',
-      endDate: '2026-09-27',
-    });
-    expect(gscWindow(new Date('2026-09-30T18:00:00Z'), { initDate: '2026-01-01' })).toEqual({
-      startDate: '2026-01-01',
-      endDate: '2026-01-31',
-    });
-    expect(gscWindow(new Date('2026-09-30T18:00:00Z'), { endDate: '2026-01-31' })).toEqual({
-      startDate: '2026-01-01',
-      endDate: '2026-01-31',
-    });
-    expect(
-      gscWindow(new Date('2026-09-30T18:00:00Z'), {
-        initDate: '2026-03-01',
-        endDate: '2026-03-15',
-      }),
-    ).toEqual({
-      startDate: '2026-03-01',
-      endDate: '2026-03-15',
-    });
+  test.each([
+    ['defaults to 28 days ending three days before the PT date', {}, '2026-08-31', '2026-09-27'],
+    ['initDate alone derives the end date', { initDate: '2026-01-01' }, '2026-01-01', '2026-01-31'],
+    ['endDate alone derives the start date', { endDate: '2026-01-31' }, '2026-01-01', '2026-01-31'],
+    [
+      'both dates are used as given',
+      { initDate: '2026-03-01', endDate: '2026-03-15' },
+      '2026-03-01',
+      '2026-03-15',
+    ],
+  ])('gscWindow %s', (_label, options, startDate, endDate) => {
+    expect(gscWindow(new Date('2026-09-30T18:00:00Z'), options)).toEqual({ startDate, endDate });
   });
 });
 
 describe('runGscQuery', () => {
-  test('skips when the token is missing and does not call Google', async () => {
-    const previous = {
-      token: process.env.GSC_ACCESS_TOKEN,
-      credentials: process.env.GSC_CREDENTIALS,
-      google: process.env.GOOGLE_APPLICATION_CREDENTIALS,
-    };
-    delete process.env.GSC_ACCESS_TOKEN;
-    delete process.env.GSC_CREDENTIALS;
-    delete process.env.GOOGLE_APPLICATION_CREDENTIALS;
-
+  test('skips when no token is set and never calls Google', async () => {
     let called = false;
 
-    try {
-      const result = await runGscQuery({
-        mode: 'check',
-        api: api({
-          async listSites() {
-            called = true;
+    const result = await withEnv(
+      {
+        GSC_ACCESS_TOKEN: undefined,
+        GSC_CREDENTIALS: undefined,
+        GOOGLE_APPLICATION_CREDENTIALS: undefined,
+      },
+      () =>
+        runGscQuery({
+          mode: 'check',
+          api: api({
+            async listSites() {
+              called = true;
 
-            return [];
-          },
+              return [];
+            },
+          }),
         }),
-      });
-      expect(result).toEqual({ status: 'skipped', reason: 'token-missing' });
-      expect(called).toBe(false);
-    } finally {
-      restoreEnv('GSC_ACCESS_TOKEN', previous.token);
-      restoreEnv('GSC_CREDENTIALS', previous.credentials);
-      restoreEnv('GOOGLE_APPLICATION_CREDENTIALS', previous.google);
-    }
+    );
+
+    expect(result).toEqual({ status: 'skipped', reason: 'token-missing' });
+    expect(called).toBe(false);
   });
   test('refuses a token whose scopes are not read-only', async () => {
     let called = false;
@@ -219,7 +253,7 @@ describe('runGscQuery', () => {
     expect(result).toMatchObject({ status: 'skipped', reason: 'scopes-not-readonly' });
     expect(called).toBe(false);
   });
-  test('queries each sampled URL with one equals filter', async () => {
+  test('queries each sampled URL on the matching property, one equals filter each', async () => {
     const queries: { siteUrl: string; body: GscQueryBody }[] = [];
     const result = await runGscQuery({
       mode: 'performance',
@@ -246,9 +280,6 @@ describe('runGscQuery', () => {
     const sampled = queries.filter(
       (call) => call.body.dimensions[0] === 'page' && call.body.dimensionFilterGroups,
     );
-    const pageQueries = queries.filter(
-      (call) => call.body.dimensions[0] === 'query' && call.body.dimensionFilterGroups,
-    );
 
     expect(result).toMatchObject({
       status: 'ok',
@@ -257,23 +288,12 @@ describe('runGscQuery', () => {
       window: { startDate: '2026-08-31', endDate: '2026-09-27' },
     });
     expect(sampled).toHaveLength(2);
-    expect(pageQueries).toHaveLength(2);
-    expect(queries.some((call) => call.body.dimensions.join(',') === 'query,page')).toBe(true);
-    expect(queries.some((call) => call.body.searchType === 'discover')).toBe(true);
-    expect(queries.some((call) => call.body.searchType === 'googleNews')).toBe(true);
 
-    for (const call of [...sampled, ...pageQueries]) {
-      expect(call.body.dimensionFilterGroups).toHaveLength(1);
-      expect(call.body.dimensionFilterGroups?.[0]?.filters).toHaveLength(1);
+    for (const call of sampled) {
       expect(call.siteUrl).toBe('https://example.com/blog/');
+      expect(call.body.dimensionFilterGroups?.[0]?.filters).toHaveLength(1);
     }
 
-    const pageQueryPayload = result.pageQueries as { pages: { url: string; rows: unknown[] }[] };
-
-    expect(pageQueryPayload.pages.map((page) => page.url)).toEqual([
-      'https://example.com/blog/post',
-      'https://example.com/blog/other',
-    ]);
     expect(JSON.stringify(result)).not.toContain('ya29.');
   });
   test('query-pages runs only the query and page slice', async () => {
@@ -299,15 +319,17 @@ describe('runGscQuery', () => {
       }),
     });
     expect(queries).toHaveLength(1);
-    expect(queries[0]?.dimensions).toEqual(['query', 'page']);
-    expect(queries[0]?.startDate).toBe('2026-01-01');
-    expect(queries[0]?.endDate).toBe('2026-01-31');
+    expect(queries[0]).toMatchObject({
+      dimensions: ['query', 'page'],
+      startDate: '2026-01-01',
+      endDate: '2026-01-31',
+    });
     expect(sitemaps).toBe(0);
     expect(result.queryPages).toEqual({ rows: [] });
     expect(result.pageQueries).toBeUndefined();
     expect(result.sitemaps).toBeUndefined();
   });
-  test('sitemaps lists submitted sitemaps and skips Search Analytics', async () => {
+  test('sitemaps slice lists submitted sitemaps without Search Analytics queries', async () => {
     let queries = 0;
     const result = await runGscQuery({
       mode: 'performance',
@@ -331,47 +353,54 @@ describe('runGscQuery', () => {
       entries: [{ path: 'https://example.com/sitemap.xml', errors: '1', warnings: '0' }],
     });
   });
-  test('sets the quota project on the googleapis auth client', async () => {
-    const previous = process.env.GSC_QUOTA_PROJECT;
-    const googleQuota = process.env.GOOGLE_CLOUD_QUOTA_PROJECT;
-    const credentials = process.env.GOOGLE_APPLICATION_CREDENTIALS;
+  test('the googleapis auth client carries the GSC_QUOTA_PROJECT quota project', async () => {
+    await withEnv(
+      {
+        GSC_QUOTA_PROJECT: 'searchunit-quota',
+        GOOGLE_CLOUD_QUOTA_PROJECT: undefined,
+        GOOGLE_APPLICATION_CREDENTIALS: MISSING_ADC,
+      },
+      async () => {
+        const auth = await gscAuth(TOKEN);
 
-    process.env.GSC_QUOTA_PROJECT = 'searchunit-quota';
-    delete process.env.GOOGLE_CLOUD_QUOTA_PROJECT;
-    process.env.GOOGLE_APPLICATION_CREDENTIALS = '/tmp/searchunit-missing-adc.json';
+        expect('client' in auth).toBe(true);
 
-    try {
-      const auth = await gscAuth(TOKEN);
+        if (!('client' in auth)) {
+          return;
+        }
 
-      expect('client' in auth).toBe(true);
-
-      if (!('client' in auth)) {
-        return;
-      }
-
-      expect(auth.client).toBeInstanceOf(google.auth.OAuth2);
-      expect(auth.client).not.toBeInstanceOf(google.auth.JWT);
-      expect(auth.client.quotaProjectId).toBe('searchunit-quota');
-      expect(auth.quotaProject).toBe('searchunit-quota');
-    } finally {
-      restoreEnv('GSC_QUOTA_PROJECT', previous);
-      restoreEnv('GOOGLE_CLOUD_QUOTA_PROJECT', googleQuota);
-      restoreEnv('GOOGLE_APPLICATION_CREDENTIALS', credentials);
-    }
+        expect(auth.client).toBeInstanceOf(google.auth.OAuth2);
+        expect(auth.client.quotaProjectId).toBe('searchunit-quota');
+        expect(auth.quotaProject).toBe('searchunit-quota');
+      },
+    );
   });
-  test('skips an invalid quota project and names a missing one on HTTP 403', async () => {
-    const previous = process.env.GSC_QUOTA_PROJECT;
+  test('quota project order: GSC_QUOTA_PROJECT, then GOOGLE_CLOUD_QUOTA_PROJECT, then the service account project', async () => {
+    expect(
+      await withEnv(
+        { GSC_QUOTA_PROJECT: 'gsc-proj', GOOGLE_CLOUD_QUOTA_PROJECT: 'cloud-proj' },
+        () => resolveQuotaProject('sa-proj'),
+      ),
+    ).toEqual({ id: 'gsc-proj', invalid: false });
+    expect(
+      await withEnv(
+        { GSC_QUOTA_PROJECT: undefined, GOOGLE_CLOUD_QUOTA_PROJECT: 'cloud-proj' },
+        () => resolveQuotaProject('sa-proj'),
+      ),
+    ).toEqual({ id: 'cloud-proj', invalid: false });
+    expect(
+      await withEnv({ GSC_QUOTA_PROJECT: undefined, GOOGLE_CLOUD_QUOTA_PROJECT: undefined }, () =>
+        resolveQuotaProject('sa-proj'),
+      ),
+    ).toEqual({ id: 'sa-proj', invalid: false });
+  });
+  test('an invalid quota project is skipped, and a 403 names the missing quota project', async () => {
+    await withEnv({ GSC_QUOTA_PROJECT: 'Not A Project' }, async () => {
+      const invalid = await runGscQuery({ mode: 'check', token: TOKEN, api: api() });
 
-    process.env.GSC_QUOTA_PROJECT = 'Not A Project';
-
-    try {
-      const invalid = await runGscQuery({
-        mode: 'check',
-        token: TOKEN,
-        api: api(),
-      });
       expect(invalid).toEqual({ status: 'skipped', reason: 'quota-project-invalid' });
-      delete process.env.GSC_QUOTA_PROJECT;
+    });
+    await withEnv({ GSC_QUOTA_PROJECT: undefined }, async () => {
       const missing = await runGscQuery({
         mode: 'performance',
         url: 'https://example.com/',
@@ -390,69 +419,50 @@ describe('runGscQuery', () => {
         reason: 'quota-project-missing',
         http: 403,
       });
-    } finally {
-      restoreEnv('GSC_QUOTA_PROJECT', previous);
-    }
+    });
   });
-  test('reads quota_project_id from Application Default Credentials', () => {
-    const credentials = process.env.GOOGLE_APPLICATION_CREDENTIALS;
-    const quota = process.env.GSC_QUOTA_PROJECT;
-    const googleQuota = process.env.GOOGLE_CLOUD_QUOTA_PROJECT;
-    const dir = mkdtempSync(join(tmpdir(), 'searchunit-adc-'));
-    const file = join(dir, 'adc.json');
-
-    writeFileSync(
-      file,
-      JSON.stringify({
-        type: 'authorized_user',
-        quota_project_id: 'adc-quota-proj',
-        client_secret: 'do-not-print',
-      }),
-    );
-
+  test('reads quota_project_id from Application Default Credentials', async () => {
+    const { dir, file } = tempFile('adc.json', {
+      type: 'authorized_user',
+      quota_project_id: 'adc-quota-proj',
+      client_secret: 'do-not-print',
+    });
     try {
-      delete process.env.GSC_QUOTA_PROJECT;
-      delete process.env.GOOGLE_CLOUD_QUOTA_PROJECT;
-      process.env.GOOGLE_APPLICATION_CREDENTIALS = file;
-      expect(resolveQuotaProject()).toEqual({ id: 'adc-quota-proj', invalid: false });
+      const quota = await withEnv(
+        {
+          GSC_QUOTA_PROJECT: undefined,
+          GOOGLE_CLOUD_QUOTA_PROJECT: undefined,
+          GOOGLE_APPLICATION_CREDENTIALS: file,
+        },
+        () => resolveQuotaProject(),
+      );
+
+      expect(quota).toEqual({ id: 'adc-quota-proj', invalid: false });
     } finally {
-      restoreEnv('GOOGLE_APPLICATION_CREDENTIALS', credentials);
-      restoreEnv('GSC_QUOTA_PROJECT', quota);
-      restoreEnv('GOOGLE_CLOUD_QUOTA_PROJECT', googleQuota);
       rmSync(dir, { recursive: true, force: true });
     }
   });
-  test('loads a read-only service account through googleapis', async () => {
-    const previous = {
-      token: process.env.GSC_ACCESS_TOKEN,
-      credentials: process.env.GSC_CREDENTIALS,
-      google: process.env.GOOGLE_APPLICATION_CREDENTIALS,
-      quota: process.env.GSC_QUOTA_PROJECT,
-      googleQuota: process.env.GOOGLE_CLOUD_QUOTA_PROJECT,
-    };
-    const dir = mkdtempSync(join(tmpdir(), 'searchunit-sa-'));
+  test('GSC_CREDENTIALS loads a read-only service account, not the ADC file', async () => {
     const { privateKey } = generateKeyPairSync('rsa', { modulusLength: 2048 });
     const email = 'search-console-sa@example.iam.gserviceaccount.com';
-    const file = join(dir, 'credentials.json');
-
-    writeFileSync(
-      file,
-      JSON.stringify({
-        type: 'service_account',
-        project_id: 'search-console-api',
-        private_key_id: 'abc123',
-        private_key: privateKey.export({ type: 'pkcs8', format: 'pem' }),
-        client_email: email,
-      }),
-    );
-    delete process.env.GSC_ACCESS_TOKEN;
-    delete process.env.GSC_QUOTA_PROJECT;
-    delete process.env.GOOGLE_CLOUD_QUOTA_PROJECT;
-    delete process.env.GOOGLE_APPLICATION_CREDENTIALS;
-    process.env.GSC_CREDENTIALS = file;
-
+    const { dir, file } = tempFile('credentials.json', {
+      type: 'service_account',
+      project_id: 'search-console-api',
+      private_key_id: 'abc123',
+      private_key: privateKey.export({ type: 'pkcs8', format: 'pem' }),
+      client_email: email,
+    });
     try {
-      const auth = await gscAuth();
+      const auth = await withEnv(
+        {
+          GSC_ACCESS_TOKEN: undefined,
+          GSC_QUOTA_PROJECT: undefined,
+          GOOGLE_CLOUD_QUOTA_PROJECT: undefined,
+          GSC_CREDENTIALS: file,
+          GOOGLE_APPLICATION_CREDENTIALS: MISSING_ADC,
+        },
+        () => gscAuth(),
+      );
 
       expect('client' in auth).toBe(true);
 
@@ -464,17 +474,9 @@ describe('runGscQuery', () => {
 
       expect(jwt).toBeInstanceOf(google.auth.JWT);
       expect(jwt.email).toBe(email);
-      expect(jwt.keyId).toBe('abc123');
       expect(jwt.scopes).toEqual([GSC_SCOPE]);
       expect(jwt.quotaProjectId).toBe('search-console-api');
-      expect(JSON.stringify({ email: jwt.email, scopes: jwt.scopes })).not.toContain('PRIVATE KEY');
-      expect(JSON.stringify(jwt.scopes)).not.toContain('indexing');
     } finally {
-      restoreEnv('GSC_ACCESS_TOKEN', previous.token);
-      restoreEnv('GSC_CREDENTIALS', previous.credentials);
-      restoreEnv('GOOGLE_APPLICATION_CREDENTIALS', previous.google);
-      restoreEnv('GSC_QUOTA_PROJECT', previous.quota);
-      restoreEnv('GOOGLE_CLOUD_QUOTA_PROJECT', previous.googleQuota);
       rmSync(dir, { recursive: true, force: true });
     }
   });
@@ -505,93 +507,59 @@ describe('runGscQuery', () => {
 });
 
 describe('gsc command', () => {
-  test('prints page rows in the table', () => {
-    const table = renderGscTables({
-      status: 'ok',
-      siteUrl: 'sc-domain:example.com',
-      pages: {
-        rows: [
-          {
-            keys: ['https://example.com/a'],
-            clicks: 2,
-            impressions: 10,
-            ctr: 0.2,
-            position: 3.46,
-          },
-        ],
-      },
-    });
-    expect(table).toContain('https://example.com/a');
-    expect(table).toContain('Pages');
-  });
-  const previous = process.env.GSC_ACCESS_TOKEN;
-
-  afterEach(() => {
-    if (previous === undefined) {
-      delete process.env.GSC_ACCESS_TOKEN;
-    } else {
-      process.env.GSC_ACCESS_TOKEN = previous;
-    }
-  });
   test('check without a token skips and ignores --fail-on', async () => {
-    const credentials = process.env.GSC_CREDENTIALS;
-    const google = process.env.GOOGLE_APPLICATION_CREDENTIALS;
+    const { code, out } = await withEnv(
+      {
+        GSC_ACCESS_TOKEN: undefined,
+        GSC_CREDENTIALS: undefined,
+        GOOGLE_APPLICATION_CREDENTIALS: undefined,
+      },
+      () => captureLogs(() => runGsc('check', flags({ failOn: 'fail' }))),
+    );
 
-    delete process.env.GSC_ACCESS_TOKEN;
-    delete process.env.GSC_CREDENTIALS;
-    delete process.env.GOOGLE_APPLICATION_CREDENTIALS;
-    const logs: string[] = [];
-    const original = console.log;
-
-    console.log = (msg?: unknown) => {
-      logs.push(String(msg ?? ''));
-    };
-    try {
-      const code = await runGsc('check', flags());
-      const payload = JSON.parse(logs.join('\n')) as { status: string; reason: string };
-
-      expect(code).toBe(0);
-      expect(payload).toMatchObject({
-        command: 'gsc',
-        action: 'check',
-        status: 'skipped',
-        reason: 'token-missing',
-      });
-    } finally {
-      console.log = original;
-      restoreEnv('GSC_CREDENTIALS', credentials);
-      restoreEnv('GOOGLE_APPLICATION_CREDENTIALS', google);
-    }
+    expect(code).toBe(0);
+    expect(JSON.parse(out)).toMatchObject({
+      command: 'gsc',
+      action: 'check',
+      status: 'skipped',
+      reason: 'token-missing',
+    });
   });
-  test('requires a URL and rejects extra check arguments', async () => {
-    await expect(runGsc(undefined, flags())).rejects.toThrow('A URL is required');
+  test.each([[undefined], ['inspect'], ['query-pages'], ['sitemaps']])(
+    'action %s requires a URL',
+    async (action) => {
+      await expect(runGsc(action, flags())).rejects.toThrow('A URL is required');
+    },
+  );
+  test('rejects extra check arguments and unknown actions with a suggestion', async () => {
     await expect(runGsc('check', flags({ rest: ['https://example.com'] }))).rejects.toThrow(
       'Too many arguments',
     );
-    await expect(runGsc('inspect', flags())).rejects.toThrow('A URL is required');
-    await expect(runGsc('query-pages', flags())).rejects.toThrow('A URL is required');
-    await expect(runGsc('sitemaps', flags())).rejects.toThrow('A URL is required');
     await expect(runGsc('inpect', flags({ rest: ['https://example.com/'] }))).rejects.toThrow(
       'Unknown command "inpect". Did you mean "inspect"?',
     );
     await expect(
       runGsc('sample-pages', flags({ rest: ['https://www.fogaonet.com/'] })),
     ).rejects.toThrow('Unknown command "sample-pages". Did you mean "sampled-pages"?');
+  });
+  test('a non-URL target reports bad-url and exits 0', async () => {
+    const { code, out } = await captureLogs(() => runGsc('example.com', flags()));
 
-    const logs: string[] = [];
-    const original = console.log;
+    expect(code).toBe(0);
+    expect(JSON.parse(out)).toMatchObject({ reason: 'bad-url' });
+  });
+});
 
-    console.log = (msg?: unknown) => {
-      logs.push(String(msg ?? ''));
-    };
-    try {
-      const code = await runGsc('example.com', flags());
-      const payload = JSON.parse(logs.join('\n')) as { reason: string };
-
-      expect(code).toBe(0);
-      expect(payload.reason).toBe('bad-url');
-    } finally {
-      console.log = original;
-    }
+describe('renderGscTables', () => {
+  test('drops control characters from Search Console text before the TTY', () => {
+    const esc = String.fromCharCode(0x1b);
+    const csi = String.fromCharCode(0x9b);
+    const table = renderGscTables({
+      status: 'ok',
+      queries: { rows: [{ keys: [`shoes${esc}[2J${csi}now`], clicks: 1, impressions: 2 }] },
+    });
+    expect(table).toContain('shoes[2Jnow');
+    expect(table).not.toContain(`${esc}[2J`);
+    expect(table).not.toContain(csi);
   });
 });

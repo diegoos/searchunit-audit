@@ -1,11 +1,10 @@
 import type { CliFlags } from '../lib/args.ts';
 import {
   fetchPublicUrl,
-  formatFetchError,
   classifyWellKnownFetch,
+  throwIfRefusedFetch,
   type FetchOutcome,
 } from '../lib/fetch.ts';
-import { CliError } from '../lib/errors.ts';
 import { emitCheckOutput, failOnExitCode, toCheckRow } from '../lib/output.ts';
 import { withProgress } from '../lib/progress.ts';
 import { requireHttpUrl } from '../lib/url.ts';
@@ -76,9 +75,7 @@ export async function runRobotsCheck(target: string | undefined, flags: CliFlags
   const analysis = await withProgress(flags, `Fetching ${robotsUrl}`, async () => {
     const page = await fetchPublicUrl(robotsUrl, { allowHttpErrors: true });
 
-    if (!page.ok && (page.error === 'blocked' || page.error === 'invalid_url')) {
-      throw new CliError(formatFetchError(page));
-    }
+    throwIfRefusedFetch(page);
 
     return analysisForRobotsOutcome(page, requestPath);
   });

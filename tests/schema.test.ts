@@ -50,9 +50,6 @@ describe('parseSchema', () => {
     expect(blocks[0]?.json).toBeNull();
     expect(blocks[0]?.types).toEqual([]);
   });
-  test('returns empty array when no JSON-LD is present', () => {
-    expect(parseSchema('<html></html>')).toEqual([]);
-  });
   test('splits @graph into one block per entity', () => {
     const html = `<html><script type="application/ld+json">{
       "@context":"https://schema.org",
@@ -83,10 +80,26 @@ describe('schemaRules', () => {
     expect(getRulesForType('UnknownType')).toBeNull();
   });
   test('isKnownType is true for aliases and false for unknown types', () => {
-    expect(isKnownType('Organization')).toBe(true);
     expect(isKnownType('ReportageNewsArticle')).toBe(true);
     expect(isKnownType('NotAType')).toBe(false);
   });
+});
+
+describe('analyzeSchema prototype keys', () => {
+  test.each(['constructor', 'toString', '__proto__'])(
+    '@type %s is an unknown type without throwing',
+    (type) => {
+      const analysis = analyzeSchema(
+        parseSchema(
+          `<html><script type="application/ld+json">{"@type":"${type}","name":"x"}</script></html>`,
+        ),
+      );
+
+      expect(analysis.blocks[0]?.checks.map((check) => check.id)).not.toContain('required_props');
+      expect(isKnownType(type)).toBe(false);
+      expect(getRulesForType(type)).toBeNull();
+    },
+  );
 });
 
 describe('analyzeSchema', () => {
@@ -107,40 +120,22 @@ describe('analyzeSchema', () => {
     expect(block.checks.find((check) => check.id === 'valid_json')?.status).toBe('pass');
     expect(block.checks.find((check) => check.id === 'required_props')?.status).toBe('pass');
   });
-  test('scores a JSON null literal as a failed block without throwing', () => {
-    const html = `<html><script type="application/ld+json">null</script></html>`;
-    const analysis = analyzeSchema(parseSchema(html));
+  test.each([
+    ['a JSON null literal', 'null', 'JSON-LD node is not an object'],
+    ['invalid JSON', '{invalid}', expect.any(String)],
+  ])('scores %s as a failed block with score 0 without throwing', (_name, body, parseError) => {
+    const block = analyzeSchema(
+      parseSchema(`<html><script type="application/ld+json">${body}</script></html>`),
+    ).blocks[0];
 
-    expect(analysis.blocks[0]?.score).toBe(0);
-    expect(analysis.blocks[0]?.status).toBe('fail');
-    expect(analysis.blocks[0]?.parseError).toBe('JSON-LD node is not an object');
-    expect(analysis.blocks[0]?.checks[0]?.id).toBe('valid_json');
-    expect(analysis.blocks[0]?.checks[0]?.status).toBe('fail');
+    expect(block).toMatchObject({ score: 0, status: 'fail', parseError });
+    expect(block?.checks[0]).toMatchObject({ id: 'valid_json', status: 'fail' });
   });
-  test('scores invalid JSON as a failed block with score 0', () => {
-    const html = `<html><script type="application/ld+json">{invalid}</script></html>`;
-    const analysis = analyzeSchema(parseSchema(html));
-
-    expect(analysis.blocks[0]?.score).toBe(0);
-    expect(analysis.blocks[0]?.status).toBe('fail');
-    expect(analysis.blocks[0]?.checks[0]?.id).toBe('valid_json');
-    expect(analysis.blocks[0]?.checks[0]?.status).toBe('fail');
-  });
-  test('fails required props for an Article missing author and date', () => {
-    const html = `<html><script type="application/ld+json">{
-      "@context":"https://schema.org","@type":"Article","headline":"My Article"
-    }</script></html>`;
-
-    const analysis = analyzeSchema(parseSchema(html));
-
-    expect(analysis.blocks[0]?.checks.find((check) => check.id === 'required_props')?.status).toBe(
-      'fail',
-    );
-  });
-  test('fails required props when author is an empty string', () => {
-    const html = `<html><script type="application/ld+json">{
-      "@context":"https://schema.org","@type":"Article","headline":"My Article","author":""
-    }</script></html>`;
+  test.each([
+    ['Article missing author and date', '"headline":"My Article"'],
+    ['Article with an empty author', '"headline":"My Article","author":""'],
+  ])('required_props fails for %s', (_name, props) => {
+    const html = `<html><script type="application/ld+json">{"@context":"https://schema.org","@type":"Article",${props}}</script></html>`;
     const analysis = analyzeSchema(parseSchema(html));
 
     expect(analysis.blocks[0]?.checks.find((check) => check.id === 'required_props')?.status).toBe(

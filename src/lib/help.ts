@@ -85,6 +85,14 @@ const NOTES: readonly Entry[] = [
     'audit',
     'Fetches the page, parses it, scores the five GEO components, then prints seo-check, geo-check, every tool finding, and the Google Profile URL',
   ],
+  [
+    'Chrome render',
+    'audit with --agent, --format json, or a .json -o also renders the page in headless Chrome (CHROME_PATH, else the default install). Without Chrome the render is skipped with a note on stderr. Install Google Chrome, or set CHROME_PATH. Markdown -o does not start Chrome',
+  ],
+  [
+    'Lighthouse lab',
+    'The same audit also runs the lighthouse CLI from PATH. Without it the lab is skipped with a note on stderr. Install it with: npm install -g lighthouse. The CLI never runs npx on its own',
+  ],
   ['kind scores', 'overview, geo, and seo'],
   [
     'page type',

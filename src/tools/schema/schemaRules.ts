@@ -116,12 +116,18 @@ export function schemaTypeName(type: string): string {
 export function getRulesForType(type: string): SchemaRuleSet | null {
   const name = schemaTypeName(type);
 
-  return RULES[name] ?? RULES[ALIASES[name] ?? ''] ?? null;
+  if (Object.hasOwn(RULES, name)) {
+    return RULES[name] ?? null;
+  }
+
+  const alias = Object.hasOwn(ALIASES, name) ? ALIASES[name] : undefined;
+
+  return alias && Object.hasOwn(RULES, alias) ? RULES[alias] : null;
 }
 
 /** Returns true when the type has validation rules in the schema rules registry. */
 export function isKnownType(type: string): boolean {
   const name = schemaTypeName(type);
 
-  return name in RULES || name in ALIASES;
+  return Object.hasOwn(RULES, name) || Object.hasOwn(ALIASES, name);
 }

@@ -2,7 +2,7 @@ import type { CheckStatus } from '../lib/output';
 
 export type { CheckStatus };
 
-const STATUS_WEIGHT: Record<CheckStatus, number> = { pass: 1, warn: 0.5, fail: 0 };
+export const STATUS_WEIGHT: Record<CheckStatus, number> = { pass: 1, warn: 0.5, fail: 0 };
 
 /** Maps a 0–100 score to pass/warn/fail using the standard 80/50 thresholds. */
 export function scoreToCheckStatus(score: number): CheckStatus {

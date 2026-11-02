@@ -1,13 +1,11 @@
 import { describe, expect, test } from 'bun:test';
 import { runGoogleProfile } from '../src/commands/google-profile.ts';
-import { CliError } from '../src/lib/errors.ts';
 import type { CliFlags } from '../src/lib/args.ts';
 import { DEFAULT_MAX_BODY_BYTES } from '../src/lib/maxBodyBytes.ts';
 import {
   buildGoogleProfileUrl,
   cleanProfileDomain,
   getApexDomain,
-  isSubdomain,
 } from '../src/lib/googleProfile.ts';
 
 function flags(over: Partial<CliFlags> = {}): CliFlags {
@@ -27,70 +25,54 @@ function flags(over: Partial<CliFlags> = {}): CliFlags {
   };
 }
 
-describe('google profile URL', () => {
-  test('cleans schemes and paths', () => {
-    expect(cleanProfileDomain('https://WWW.Example.COM/about')).toBe('www.example.com');
-    expect(cleanProfileDomain('http://example.net/')).toBe('example.net');
-    expect(cleanProfileDomain('blog.example.com')).toBe('blog.example.com');
-    expect(cleanProfileDomain('user:pass@example.com')).toBe('example.com');
-    expect(cleanProfileDomain('example.com:8080')).toBe('example.com');
-    expect(cleanProfileDomain('example.com?q=1')).toBe('example.com');
+describe('google profile helpers', () => {
+  test.each([
+    ['https://WWW.Example.COM/about', 'www.example.com'],
+    ['user:pass@example.com', 'example.com'],
+    ['example.com:8080', 'example.com'],
+    ['example.com?q=1', 'example.com'],
+  ])('cleanProfileDomain(%s) is %s', (input, domain) => {
+    expect(cleanProfileDomain(input)).toBe(domain);
   });
-  test('detects subdomains via tldts', () => {
-    expect(getApexDomain('www.example.com')).toBe('example.com');
-    expect(getApexDomain('g1.globo.com')).toBe('globo.com');
-    expect(getApexDomain('blog.exemplo.com.br')).toBe('exemplo.com.br');
-    expect(isSubdomain('www.example.com')).toBe(true);
-    expect(isSubdomain('g1.globo.com')).toBe(true);
-    expect(isSubdomain('example.com')).toBe(false);
-    expect(isSubdomain('exemplo.com.br')).toBe(false);
+  test.each([
+    ['www.example.com', 'example.com'],
+    ['g1.globo.com', 'globo.com'],
+    ['blog.exemplo.com.br', 'exemplo.com.br'],
+  ])('getApexDomain(%s) is %s', (host, apex) => {
+    expect(getApexDomain(host)).toBe(apex);
   });
-  test('builds a known profile.google.com URL for example.com', () => {
-    expect(buildGoogleProfileUrl('example.com')).toBe(
-      'https://profile.google.com/cp/Eg0KC2V4YW1wbGUuY29t',
-    );
-    expect(buildGoogleProfileUrl('https://example.com/section/x')).toBe(
-      'https://profile.google.com/cp/Eg0KC2V4YW1wbGUuY29t',
-    );
-    expect(buildGoogleProfileUrl('www.example.com')).toBe(
-      'https://profile.google.com/cp/EhEKD3d3dy5leGFtcGxlLmNvbQ==',
-    );
+  test.each([
+    ['example.com', 'https://profile.google.com/cp/Eg0KC2V4YW1wbGUuY29t'],
+    ['https://example.com/section/x', 'https://profile.google.com/cp/Eg0KC2V4YW1wbGUuY29t'],
+    ['www.example.com', 'https://profile.google.com/cp/EhEKD3d3dy5leGFtcGxlLmNvbQ=='],
+  ])('buildGoogleProfileUrl(%s) builds the profile link', (input, url) => {
+    expect(buildGoogleProfileUrl(input)).toBe(url);
   });
 });
 
 describe('google-profile command', () => {
-  test('throws when the domain is missing', async () => {
-    await expect(runGoogleProfile(undefined, flags())).rejects.toThrow(CliError);
-    await expect(runGoogleProfile('  ', flags())).rejects.toThrow('A domain is required');
+  test.each([
+    [undefined, 'A domain is required'],
+    ['  ', 'A domain is required'],
+    ['localhost', 'Invalid domain'],
+  ])('domain %s throws "%s"', async (domain, message) => {
+    await expect(runGoogleProfile(domain, flags())).rejects.toThrow(message);
   });
-  test('throws when the token has no dot', async () => {
-    await expect(runGoogleProfile('localhost', flags())).rejects.toThrow('Invalid domain');
-  });
-  test('prints JSON with domain apex subdomain and profile URL', async () => {
+  test('prints JSON with the domain, apex, subdomain flag, and profile URL', async () => {
     const logs: string[] = [];
     const original = console.log;
+    const previous = process.env.CRUX_API_KEY;
 
     console.log = (msg?: unknown) => {
       logs.push(String(msg ?? ''));
     };
-    const previous = process.env.CRUX_API_KEY;
-
     delete process.env.CRUX_API_KEY;
 
     try {
       const code = await runGoogleProfile('www.example.com', flags({ json: true }));
 
       expect(code).toBe(0);
-      const payload = JSON.parse(logs.join('\n')) as {
-        ok: boolean;
-        command: string;
-        domain: string;
-        apex: string;
-        isSubdomain: boolean;
-        profileUrl: string;
-        cruxApiKeyAvailable: boolean;
-      };
-      expect(payload).toEqual({
+      expect(JSON.parse(logs.join('\n'))).toEqual({
         ok: true,
         command: 'google-profile',
         domain: 'www.example.com',

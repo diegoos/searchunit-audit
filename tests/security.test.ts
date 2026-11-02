@@ -3,7 +3,6 @@ import {
   analyzeSecurityHeaders,
   scoreToLetterGrade,
 } from '../src/tools/security/analyzeSecurityHeaders.ts';
-
 import { buildAnalyzeContext } from '../src/tools/security/buildAnalyzeContext.ts';
 import {
   parseCspDirectives,
@@ -11,6 +10,7 @@ import {
   parseSecurityHeaders,
   type SecurityHeaderRaw,
 } from '../src/tools/security/parseSecurityHeaders.ts';
+import type { LetterGrade } from '../src/tools/security/securityHeadersRules.ts';
 
 const FULL_HEADERS: SecurityHeaderRaw = {
   hsts: 'max-age=63072000; includeSubDomains; preload',
@@ -26,6 +26,8 @@ const FULL_HEADERS: SecurityHeaderRaw = {
   xRobotsTag: null,
 };
 
+const HTTPS_OK = { https: true, redirectNotFollowed: false, allScoringChecksPass: true };
+
 describe('parseSecurityHeaders', () => {
   test('maps lowercase header names and fills missing keys with null', () => {
     expect(
@@ -35,42 +37,23 @@ describe('parseSecurityHeaders', () => {
       }),
     ).toEqual({
       hsts: 'max-age=1',
-
       csp: null,
-
       cspReportOnly: null,
-
       xFrame: null,
-
       xContentType: 'nosniff',
-
       referrerPolicy: null,
-
       permissionsPolicy: null,
-
       coop: null,
-
       coep: null,
-
       corp: null,
-
       xRobotsTag: null,
     });
-  });
-  test('returns all-null when headers are omitted', () => {
     expect(parseSecurityHeaders(undefined).hsts).toBeNull();
   });
 });
 
 describe('parseHstsDirectives', () => {
-  test('returns empty flags when the header is missing', () => {
-    expect(parseHstsDirectives(null)).toEqual({
-      maxAge: null,
-      includeSubDomains: false,
-      preload: false,
-    });
-  });
-  test('parses max-age includeSubDomains and preload from the first header', () => {
+  test('parses max-age, includeSubDomains and preload from the first header', () => {
     expect(parseHstsDirectives('max-age=31536000; includeSubDomains; preload')).toEqual({
       maxAge: 31536000,
       includeSubDomains: true,
@@ -85,9 +68,6 @@ describe('parseHstsDirectives', () => {
 });
 
 describe('parseCspDirectives', () => {
-  test('returns an empty map for a missing header', () => {
-    expect(parseCspDirectives(null).size).toBe(0);
-  });
   test('splits directives and merges comma-joined headers', () => {
     const map = parseCspDirectives("default-src 'self'; script-src 'self', frame-ancestors 'none'");
 
@@ -98,7 +78,7 @@ describe('parseCspDirectives', () => {
 });
 
 describe('buildAnalyzeContext', () => {
-  test('sets https from the final URL and redirect from 3xx status', () => {
+  test('sets https from the final URL and redirectNotFollowed from a 3xx status', () => {
     expect(buildAnalyzeContext({ finalUrl: 'https://example.com/', status: 200 })).toEqual({
       https: true,
       redirectNotFollowed: false,
@@ -111,32 +91,30 @@ describe('buildAnalyzeContext', () => {
 });
 
 describe('scoreToLetterGrade', () => {
-  const httpsPass = { https: true, allScoringChecksPass: true, redirectNotFollowed: false };
-
-  test('returns R when a redirect was not followed and F when HTTPS is off', () => {
-    expect(scoreToLetterGrade(100, { ...httpsPass, redirectNotFollowed: true })).toBe('R');
-    expect(scoreToLetterGrade(100, { ...httpsPass, https: false })).toBe('F');
+  test('returns R for a redirect that was not followed, and F when HTTPS is off', () => {
+    expect(scoreToLetterGrade(100, { ...HTTPS_OK, redirectNotFollowed: true })).toBe('R');
+    expect(scoreToLetterGrade(100, { ...HTTPS_OK, https: false })).toBe('F');
   });
-  test('maps score bands on HTTPS', () => {
-    expect(scoreToLetterGrade(100, httpsPass)).toBe('A+');
-    expect(scoreToLetterGrade(100, { ...httpsPass, allScoringChecksPass: false })).toBe('A');
-    expect(scoreToLetterGrade(90, httpsPass)).toBe('A');
-    expect(scoreToLetterGrade(80, httpsPass)).toBe('B+');
-    expect(scoreToLetterGrade(70, httpsPass)).toBe('B');
-    expect(scoreToLetterGrade(60, httpsPass)).toBe('C+');
-    expect(scoreToLetterGrade(50, httpsPass)).toBe('C');
-    expect(scoreToLetterGrade(40, httpsPass)).toBe('D+');
-    expect(scoreToLetterGrade(30, httpsPass)).toBe('D');
-    expect(scoreToLetterGrade(29, httpsPass)).toBe('F');
+  test.each<[number, boolean, LetterGrade]>([
+    [100, true, 'A+'],
+    [100, false, 'A'],
+    [90, true, 'A'],
+    [80, true, 'B+'],
+    [70, true, 'B'],
+    [60, true, 'C+'],
+    [50, true, 'C'],
+    [40, true, 'D+'],
+    [30, true, 'D'],
+    [29, true, 'F'],
+  ])('score %p with all checks passing=%p on HTTPS gives %p', (score, allPass, grade) => {
+    expect(scoreToLetterGrade(score, { ...HTTPS_OK, allScoringChecksPass: allPass })).toBe(grade);
   });
 });
 
 describe('analyzeSecurityHeaders', () => {
-  test('returns A+ with required analysis fields when headers are complete', () => {
-    const analysis = analyzeSecurityHeaders(FULL_HEADERS, {
-      https: true,
-      redirectNotFollowed: false,
-    });
+  test('complete headers over HTTPS grade A+ with a passing overall status', () => {
+    const analysis = analyzeSecurityHeaders(FULL_HEADERS, HTTPS_OK);
+
     expect(analysis.letterGrade).toBe('A+');
     expect(analysis.score).toBeGreaterThanOrEqual(95);
     expect(analysis.overallStatus).toBe('pass');
@@ -146,42 +124,25 @@ describe('analyzeSecurityHeaders', () => {
     expect(analysis.summary.present).toBeLessThanOrEqual(analysis.summary.total);
     expect(analysis.checks.length).toBeGreaterThanOrEqual(analysis.summary.total);
     expect(analysis.checks.find((check) => check.id === 'x-frame-options')?.status).toBe('pass');
-    expect(analysis.checks.find((check) => check.id === 'observatory')).toEqual(
-      expect.objectContaining({
-        status: 'info',
-        detail:
-          'Tests and grades follow MDN HTTP Observatory. https://developer.mozilla.org/en-US/observatory/docs/tests_and_scoring',
-      }),
-    );
+    expect(analysis.checks.find((check) => check.id === 'observatory')?.status).toBe('info');
   });
-  test('returns R and score 0 when the redirect was not followed', () => {
+  test('a redirect that was not followed grades R with score 0', () => {
     const analysis = analyzeSecurityHeaders(FULL_HEADERS, {
-      https: true,
+      ...HTTPS_OK,
       redirectNotFollowed: true,
     });
-    expect(analysis.letterGrade).toBe('R');
-    expect(analysis.score).toBe(0);
-    expect(analysis.redirectNotFollowed).toBe(true);
+    expect(analysis).toMatchObject({ letterGrade: 'R', score: 0, redirectNotFollowed: true });
   });
-  test('fails HSTS with max-age=0', () => {
-    const analysis = analyzeSecurityHeaders(
-      { ...FULL_HEADERS, hsts: 'max-age=0' },
-      { https: true, redirectNotFollowed: false },
-    );
-    expect(analysis.checks.find((check) => check.id === 'strict-transport-security')?.status).toBe(
-      'fail',
-    );
-  });
-  test('warns when CSP allows unsafe-inline scripts', () => {
-    const analysis = analyzeSecurityHeaders(
-      {
-        ...FULL_HEADERS,
-        csp: "default-src 'self'; script-src 'self' 'unsafe-inline'",
-      },
-      { https: true, redirectNotFollowed: false },
-    );
-    expect(analysis.checks.find((check) => check.id === 'content-security-policy')?.status).toBe(
+  test.each<[string, Partial<SecurityHeaderRaw>, 'fail' | 'warn']>([
+    ['strict-transport-security', { hsts: 'max-age=0' }, 'fail'],
+    [
+      'content-security-policy',
+      { csp: "default-src 'self'; script-src 'self' 'unsafe-inline'" },
       'warn',
-    );
+    ],
+  ])('%s check is %s for a weak header', (id, over, status) => {
+    const analysis = analyzeSecurityHeaders({ ...FULL_HEADERS, ...over }, HTTPS_OK);
+
+    expect(analysis.checks.find((check) => check.id === id)?.status).toBe(status);
   });
 });

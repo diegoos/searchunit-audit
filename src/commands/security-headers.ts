@@ -1,6 +1,5 @@
 import type { CliFlags } from '../lib/args.ts';
-import { fetchPublicUrl, formatFetchError } from '../lib/fetch.ts';
-import { CliError } from '../lib/errors.ts';
+import { fetchPageOrThrow } from '../lib/fetch.ts';
 import { emitCheckOutput, failOnExitCode, toCheckRow } from '../lib/output.ts';
 import { withProgress } from '../lib/progress.ts';
 import { requireHttpUrl } from '../lib/url.ts';
@@ -11,18 +10,12 @@ import { parseSecurityHeaders } from '../tools/security/parseSecurityHeaders.ts'
 /** Fetches a URL and scores HTTP security headers (MDN Observatory-inspired). */
 export async function runSecurityHeaders(
   target: string | undefined,
-
   flags: CliFlags,
 ): Promise<number> {
   const url = requireHttpUrl(target);
 
   const { page, analysis } = await withProgress(flags, `Fetching ${url}`, async () => {
-    const page = await fetchPublicUrl(url);
-
-    if (!page.ok) {
-      throw new CliError(formatFetchError(page));
-    }
-
+    const page = await fetchPageOrThrow(url);
     const headers = parseSecurityHeaders(page.headers);
     const ctx = buildAnalyzeContext({ finalUrl: page.finalUrl, status: page.status });
 

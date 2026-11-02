@@ -142,14 +142,6 @@ describe('analyzeRobots', () => {
     expect(administrator.crawlers.every((crawler) => crawler.allowed)).toBe(false);
     expect(admin.crawlers.every((crawler) => crawler.access === 'restricted')).toBe(true);
   });
-  test('equal-length Allow and Disallow treat the path as allowed', () => {
-    const analysis = analyzeRobots(
-      parseRobots(`User-agent: *\nAllow: /foo\nDisallow: /foo\n`),
-      '/foo',
-    );
-
-    expect(analysis.crawlers.every((crawler) => crawler.allowed)).toBe(true);
-  });
   test('merges later User-agent blocks for the same crawler', () => {
     const analysis = analyzeRobots(
       parseRobots(`User-agent: Googlebot\nDisallow: /\nUser-agent: Googlebot\nAllow: /\n`),

@@ -2,19 +2,14 @@ import { getDomain } from 'tldts';
 
 const PROFILE_BASE = 'https://profile.google.com/cp/';
 
-/**
-
- * Strips scheme and path from a raw domain input for profile URL building.
-
- */
+/** Strips scheme and path from a raw domain input for profile URL building. */
 export function cleanProfileDomain(raw: string): string {
   const trimmed = raw.trim();
 
   try {
     const withScheme = /^[a-z][a-z0-9+.-]*:\/\//i.test(trimmed) ? trimmed : `https://${trimmed}`;
-    const hostname = new URL(withScheme).hostname.replace(/\.$/, '').toLowerCase();
 
-    return hostname;
+    return new URL(withScheme).hostname.replace(/\.$/, '').toLowerCase();
   } catch {
     return trimmed
       .replace(/^https?:\/\//i, '')
@@ -34,7 +29,6 @@ export function isSubdomain(hostname: string): boolean {
 }
 
 /** Encodes a non-negative integer as protobuf varint bytes for the Google Profile URL payload. */
-
 function toVarint(value: number): number[] {
   const out: number[] = [];
   let n = value;

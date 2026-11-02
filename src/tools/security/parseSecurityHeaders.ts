@@ -89,6 +89,15 @@ export function parseHstsDirectives(value: string | null): HstsDirectives {
   return { maxAge, includeSubDomains, preload };
 }
 
+/** Source tokens after a directive name, with trailing commas removed. */
+function cspSources(text: string): string[] {
+  return text
+    .trim()
+    .split(/\s+/)
+    .map((s) => s.replace(/,+$/, ''))
+    .filter(Boolean);
+}
+
 /**
  * Splits a CSP header into a map of directive → sources.
  * Fetch joins duplicate CSP headers with ", "; treat those as directive separators.
@@ -114,26 +123,10 @@ export function parseCspDirectives(value: string | null): Map<string, string[]> 
     }
 
     const spaceIdx = trimmed.indexOf(' ');
+    const directive = (spaceIdx === -1 ? trimmed : trimmed.slice(0, spaceIdx)).toLowerCase();
+    const sources = spaceIdx === -1 ? [] : cspSources(trimmed.slice(spaceIdx + 1));
 
-    if (spaceIdx === -1) {
-      const directive = trimmed.toLowerCase();
-
-      if (!out.has(directive)) {
-        out.set(directive, []);
-      }
-    } else {
-      const directive = trimmed.slice(0, spaceIdx).toLowerCase();
-      const sources = trimmed
-        .slice(spaceIdx + 1)
-        .trim()
-        .split(/\s+/)
-        .map((s) => s.replace(/,+$/, ''))
-        .filter(Boolean);
-
-      const prev = out.get(directive) ?? [];
-
-      out.set(directive, [...prev, ...sources]);
-    }
+    out.set(directive, [...(out.get(directive) ?? []), ...sources]);
   }
 
   return out;

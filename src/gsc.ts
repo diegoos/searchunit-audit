@@ -4,6 +4,7 @@ import { homedir } from 'node:os';
 import { join } from 'node:path';
 import type { Auth } from 'googleapis';
 import { isBlockedHostname, isBlockedIpString } from './ip-policy.ts';
+import { isRecord } from './lib/guards.ts';
 
 /** Read-only Search Console scope. A write scope is refused. */
 export const GSC_SCOPE = 'https://www.googleapis.com/auth/webmasters.readonly';
@@ -122,6 +123,11 @@ interface GscQueryOptions {
   /** Replaces the googleapis clients. Auth still comes from the env or `token`. */
   api?: GscApi;
   now?: Date;
+}
+
+/** Skip payload: `status` is always `skipped`. `reason` says why. `extra` adds fields after it. */
+function skipped(reason: string, extra: JsonRecord = {}): JsonRecord {
+  return { status: 'skipped', reason, ...extra };
 }
 
 /** Replaces credential-shaped substrings before anything is printed. */
@@ -299,7 +305,7 @@ export async function gscAuth(explicit?: string): Promise<GscAuth | { skip: Json
   const preview = resolveQuotaProject();
 
   if (preview.invalid) {
-    return { skip: { status: 'skipped', reason: 'quota-project-invalid' } };
+    return { skip: skipped('quota-project-invalid') };
   }
 
   const source = credentialSource(explicit);
@@ -336,11 +342,9 @@ export async function gscAuth(explicit?: string): Promise<GscAuth | { skip: Json
     return { client, quotaProject: quota.id };
   } catch (err) {
     return {
-      skip: {
-        status: 'skipped',
-        reason: 'credentials-invalid',
+      skip: skipped('credentials-invalid', {
         message: shortMessage(err instanceof Error ? err.message : 'cannot load credentials'),
-      },
+      }),
     };
   }
 }
@@ -403,7 +407,7 @@ function credentialSource(explicit: string | undefined): CredentialSource {
   const path = configured || process.env.GOOGLE_APPLICATION_CREDENTIALS?.trim();
 
   if (!path) {
-    return { skip: { status: 'skipped', reason: 'token-missing' } };
+    return { skip: skipped('token-missing') };
   }
 
   const loaded = readServiceAccountMeta(path);
@@ -415,15 +419,13 @@ function credentialSource(explicit: string | undefined): CredentialSource {
   // A missing ADC file, or one that is not a service account, is no GSC credential.
 
   if (!configured && (loaded.kind === 'other' || loaded.message === 'cannot read credentials')) {
-    return { skip: { status: 'skipped', reason: 'token-missing' } };
+    return { skip: skipped('token-missing') };
   }
 
   return {
-    skip: {
-      status: 'skipped',
-      reason: 'credentials-invalid',
+    skip: skipped('credentials-invalid', {
       message: loaded.kind === 'error' ? loaded.message : 'expected a service account key',
-    },
+    }),
   };
 }
 
@@ -484,7 +486,7 @@ async function userScopeSkip(auth: GscAuth): Promise<JsonRecord | null> {
 
     return scopeSkip(info.scopes);
   } catch {
-    return { status: 'skipped', reason: 'token-invalid' };
+    return skipped('token-invalid');
   }
 }
 
@@ -506,17 +508,17 @@ function scopesOf(client: Auth.OAuth2Client): string[] {
 /** Skip payload when scopes are missing, unexpected, or not read-only. `null` means allowed. */
 function scopeSkip(scopes: string[] | null): JsonRecord | null {
   if (!scopes) {
-    return { status: 'skipped', reason: 'token-invalid' };
+    return skipped('token-invalid');
   }
 
   const unexpected = unexpectedScopes(scopes);
 
   if (unexpected.length > 0) {
-    return { status: 'skipped', reason: 'scopes-not-readonly', unexpected };
+    return skipped('scopes-not-readonly', { unexpected });
   }
 
   if (!scopes.includes(GSC_SCOPE)) {
-    return { status: 'skipped', reason: 'gsc-scope-missing' };
+    return skipped('gsc-scope-missing');
   }
 
   return null;
@@ -533,11 +535,9 @@ async function proveServiceAccount(auth: GscAuth): Promise<JsonRecord | null> {
 
     return null;
   } catch (err) {
-    return {
-      status: 'skipped',
-      reason: 'credentials-invalid',
+    return skipped('credentials-invalid', {
       message: shortMessage(err instanceof Error ? err.message : 'token exchange failed'),
-    };
+    });
   }
 }
 
@@ -546,7 +546,7 @@ async function runWithApi(opts: GscQueryOptions, api: GscApi): Promise<JsonRecor
   const quota = resolveQuotaProject();
 
   if (quota.invalid) {
-    return { status: 'skipped', reason: 'quota-project-invalid' };
+    return skipped('quota-project-invalid');
   }
 
   const source = credentialSource(opts.token);
@@ -581,7 +581,7 @@ async function runReport(opts: GscQueryOptions, api: GscApi): Promise<JsonRecord
   const site = pickSite(sites.entries, pageUrl);
 
   if (!site) {
-    return { status: 'skipped', reason: 'no-property' };
+    return skipped('no-property');
   }
 
   const urls = sameHostUrls(pageUrl, opts.sample ?? []);
@@ -774,7 +774,11 @@ async function performanceReport(
   return result;
 }
 
+/** Query body fields that a slice sets on its own. The window and data state come from the base. */
 type AnalyticsBody = Omit<GscQueryBody, 'startDate' | 'endDate' | 'dataState'>;
+
+/** Window and data state shared by every slice of one run. */
+type WindowedBody = Pick<GscQueryBody, 'startDate' | 'endDate' | 'dataState'>;
 
 /** Search Analytics reads. `command` is the subcommand. `field` is the payload key. */
 const ANALYTICS: { command: GscSlice; field: string; body: AnalyticsBody }[] = [
@@ -814,7 +818,7 @@ async function sampledPages(
   api: GscApi,
   site: string,
   urls: string[],
-  base: Pick<GscQueryBody, 'startDate' | 'endDate' | 'dataState'>,
+  base: WindowedBody,
 ): Promise<JsonRecord> {
   const rows: JsonRecord[] = [];
   const errors: JsonRecord[] = [];
@@ -850,7 +854,7 @@ async function pageQueries(
   api: GscApi,
   site: string,
   urls: string[],
-  base: Pick<GscQueryBody, 'startDate' | 'endDate' | 'dataState'>,
+  base: WindowedBody,
 ): Promise<JsonRecord> {
   const pages: JsonRecord[] = [];
 
@@ -999,7 +1003,7 @@ function rejectUrl(url: string | undefined): JsonRecord | null {
     return null;
   }
 
-  return { status: 'skipped', reason: 'bad-url' };
+  return skipped('bad-url');
 }
 
 /** One short line safe to print. */
@@ -1089,10 +1093,10 @@ function prefixRank(site: string): number {
 /** Skip payload for a failed Search Console call. */
 function httpSkip(status: number, message: string): JsonRecord {
   if (status === 403 && /quota project/i.test(message)) {
-    return { status: 'skipped', reason: 'quota-project-missing', http: status, message };
+    return skipped('quota-project-missing', { http: status, message });
   }
 
-  return { status: 'skipped', reason: 'http-error', http: status, message };
+  return skipped('http-error', { http: status, message });
 }
 
 /** `quota_project_id` from the Application Default Credentials file. */
@@ -1130,9 +1134,4 @@ function defaultAdcPath(): string {
   }
 
   return join(homedir(), '.config', 'gcloud', 'application_default_credentials.json');
-}
-
-/** Plain object, not an array. */
-function isRecord(value: unknown): value is JsonRecord {
-  return typeof value === 'object' && value !== null && !Array.isArray(value);
 }

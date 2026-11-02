@@ -24,6 +24,25 @@ const KNOWN_DIRECTIVES = new Set([
   'request-rate',
 ]);
 
+/** Applies a disallow, allow, or crawl-delay directive to the open group. */
+function applyRuleDirective(group: RobotsGroup, directive: string, value: string): void {
+  if (directive === 'disallow') {
+    if (value !== '') {
+      group.disallow.push(value);
+    }
+  } else if (directive === 'allow') {
+    if (value !== '') {
+      group.allow.push(value);
+    }
+  } else if (directive === 'crawl-delay') {
+    const delay = parseFloat(value);
+
+    if (!isNaN(delay)) {
+      group.crawlDelay = delay;
+    }
+  }
+}
+
 /** Parses robots.txt into agent groups, rules, and sitemap directives (RFC 9309 groups). */
 export function parseRobots(content: string): ParsedRobots {
   const lines = content.split(/\r?\n/);
@@ -32,27 +51,16 @@ export function parseRobots(content: string): ParsedRobots {
   const syntaxErrors: string[] = [];
 
   let currentGroup: RobotsGroup | null = null;
-
-  // True while we're still reading User-agent lines at the top of a new group.
-
-  // Any rule directive (disallow/allow/crawl-delay) flips this to false, so
-
-  // the next User-agent starts a fresh group even without a blank line.
+  // True while reading User-agent lines at the top of a group. A rule directive
+  // clears it, so the next User-agent starts a fresh group even without a blank line.
   let acceptingAgents = false;
 
   for (let i = 0; i < lines.length; i++) {
     const raw = lines[i];
     const line = raw.replace(/#.*$/, '').trim();
 
-    // Blank lines do NOT terminate a group. Per RFC 9309 a group spans its
-
-    // User-agent line(s) followed by rules, with empty lines allowed between
-
-    // them; only a new User-agent line (after rules) starts a fresh group —
-
-    // handled below via `acceptingAgents`. Treating blanks as separators
-
-    // orphaned rules that followed an empty line inside a group.
+    // Blank lines do not end a group (RFC 9309): rules after an empty line still
+    // belong to the open group. Only a User-agent line after rules starts a new one.
 
     if (!line) {
       continue;
@@ -109,22 +117,7 @@ export function parseRobots(content: string): ParsedRobots {
     // Any rule directive means we're no longer in the User-agent header phase.
 
     acceptingAgents = false;
-
-    if (directive === 'disallow') {
-      if (value !== '') {
-        currentGroup.disallow.push(value);
-      }
-    } else if (directive === 'allow') {
-      if (value !== '') {
-        currentGroup.allow.push(value);
-      }
-    } else if (directive === 'crawl-delay') {
-      const delay = parseFloat(value);
-
-      if (!isNaN(delay)) {
-        currentGroup.crawlDelay = delay;
-      }
-    }
+    applyRuleDirective(currentGroup, directive, value);
   }
 
   if (currentGroup) {

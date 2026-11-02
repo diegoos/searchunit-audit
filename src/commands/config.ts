@@ -13,10 +13,10 @@ import {
   readConfigMapping,
   writeConfigMapping,
   type ConfigKey,
+  type ConfigLayerValues,
 } from '../lib/config.ts';
-
 import { CliError } from '../lib/errors.ts';
-import { printJson, renderAgentMarkdown } from '../lib/output.ts';
+import { printJson, renderAgentMarkdown, stripControls } from '../lib/output.ts';
 import { formatTable } from '../lib/table.ts';
 import { theme } from '../lib/theme.ts';
 
@@ -28,10 +28,11 @@ interface ConfigDirs {
   home?: string;
 }
 
-interface ConfigLayer {
-  local: string | undefined;
-  global: string | undefined;
-  default: string | undefined;
+/** `local`, `global`, and `default` as JSON: a missing value is `null`. */
+interface JsonLayers {
+  local: string | null;
+  global: string | null;
+  default: string | null;
 }
 
 const SECRET_YAML_NAMES = [
@@ -59,8 +60,13 @@ function redactSecret(key: ConfigKey, value: string): string {
   return (key === 'crux_api_key' || key === 'gsc_access_token') && value.trim() ? REDACTED : value;
 }
 
+/** Table cell for one layer value. Missing shows as "not set"; secrets are redacted. */
 function displayLayerForTable(key: ConfigKey, value: string | undefined): string {
-  return displayLayer(value === undefined ? undefined : redactSecret(key, value));
+  if (value === undefined) {
+    return theme.dim(NOT_SET);
+  }
+
+  return redactSecret(key, stripControls(value));
 }
 
 function assertWritableScope(key: ConfigKey, flags: CliFlags): void {
@@ -72,18 +78,21 @@ function assertWritableScope(key: ConfigKey, flags: CliFlags): void {
   }
 }
 
-function redactLayerJson(
-  key: ConfigKey,
-  layer: ReturnType<typeof jsonLayers>,
-): ReturnType<typeof jsonLayers> {
+/** JSON layer fields for one key. Secrets in the home-only keys are redacted. */
+function layerJson(key: ConfigKey, layer: ConfigLayerValues): JsonLayers {
+  const json: JsonLayers = {
+    local: layer.local ?? null,
+    global: layer.global ?? null,
+    default: layer.default ?? null,
+  };
   if (!isHomeOnlyConfigKey(key)) {
-    return layer;
+    return json;
   }
 
   return {
-    local: layer.local ? redactSecret(key, layer.local) : layer.local,
-    global: layer.global ? redactSecret(key, layer.global) : layer.global,
-    default: layer.default,
+    local: json.local ? redactSecret(key, json.local) : json.local,
+    global: json.global ? redactSecret(key, json.global) : json.global,
+    default: json.default,
   };
 }
 
@@ -205,9 +214,7 @@ function listKeys(path: string, flags: CliFlags, dirs: ConfigDirs): number {
       path,
       global: Boolean(flags.global),
       values: redactMappingForJson(readConfigMapping(path) ?? {}),
-      layers: Object.fromEntries(
-        layers.map(({ key, layer }) => [key, redactLayerJson(key, jsonLayers(layer))]),
-      ),
+      layers: Object.fromEntries(layers.map(({ key, layer }) => [key, layerJson(key, layer)])),
     },
     headers: ['Key', 'Local', 'Global', 'Default', 'Effective'],
     rows: layers.map(({ key, layer }) => [
@@ -226,7 +233,7 @@ function getKey(path: string, raw: string, flags: CliFlags, dirs: ConfigDirs): n
   const key = requireKey(raw);
   const layer = configLayerValues(key, dirs);
   const value = effectiveConfigValue(key, layer);
-  const layersJson = redactLayerJson(key, jsonLayers(layer));
+  const layersJson = layerJson(key, layer);
 
   printConfigView(flags, {
     subtitle: key,
@@ -275,7 +282,7 @@ function setKey(
       key,
       value: jsonSecretValue(key, stored),
       created,
-      ...redactLayerJson(key, jsonLayers(layer)),
+      ...layerJson(key, layer),
     },
     headers: ['Field', 'Value'],
 
@@ -314,7 +321,7 @@ function removeKey(
       path,
       action: 'remove',
       key,
-      ...redactLayerJson(key, jsonLayers(layer)),
+      ...layerJson(key, layer),
     },
     headers: ['Field', 'Value'],
 
@@ -366,7 +373,7 @@ function configFileLine(label: string, path: string): string {
   return `${theme.dim(label.padEnd(6))}  ${theme.url(path)}`;
 }
 
-function layerRows(key: ConfigKey, layer: ConfigLayer): string[][] {
+function layerRows(key: ConfigKey, layer: ConfigLayerValues): string[][] {
   return [
     ['Local', displayLayerForTable(key, layer.local)],
     ['Global', displayLayerForTable(key, layer.global)],
@@ -375,28 +382,12 @@ function layerRows(key: ConfigKey, layer: ConfigLayer): string[][] {
   ];
 }
 
-function displayLayer(value: string | undefined): string {
-  return value ?? theme.dim(NOT_SET);
-}
-
 function jsonSecretValue(key: ConfigKey, value: string | null | undefined): string | null {
   if (value === undefined || value === null) {
     return null;
   }
 
   return redactSecret(key, value);
-}
-
-function jsonLayers(layer: ConfigLayer): {
-  local: string | null;
-  global: string | null;
-  default: string | null;
-} {
-  return {
-    local: layer.local ?? null,
-    global: layer.global ?? null,
-    default: layer.default ?? null,
-  };
 }
 
 function announceWrite(path: string, created: boolean, flags: CliFlags): void {

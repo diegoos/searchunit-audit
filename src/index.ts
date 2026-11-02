@@ -6,13 +6,9 @@ import { setActiveMaxBodyBytes } from './lib/fetch.ts';
 import { printError } from './lib/output.ts';
 
 /**
-
  * SearchUnit CLI entry. Parses argv, runs the selected command, and maps
-
  * errors to process exit codes (0 ok, 1 analysis threshold, 2 runtime).
-
  */
-
 async function main(): Promise<void> {
   try {
     const parsed = parseInvocation(process.argv.slice(2));
@@ -29,7 +25,6 @@ async function main(): Promise<void> {
  * Parses argv, then re-parses with YAML defaults. `config` / help / version skip
  * the file so a broken YAML cannot block `searchunit config`.
  */
-
 function parseInvocation(argv: string[]): ParsedCli {
   const parsed = parseCli(argv);
 

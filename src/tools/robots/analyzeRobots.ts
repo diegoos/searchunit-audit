@@ -1,5 +1,5 @@
 import type { Check, CheckStatus } from '../types';
-import { scoreToCheckStatus } from '../types';
+import { STATUS_WEIGHT, scoreToCheckStatus } from '../types';
 import type { ParsedRobots, RobotsGroup } from './parseRobots';
 import { AI_CRAWLERS } from './aiCrawlers';
 import type { AICrawler } from './aiCrawlers';
@@ -46,12 +46,16 @@ function agentAccess(groups: RobotsGroup[], agent: string, path: string): Robots
   return resolveRobotsAccess(allow, disallow, path);
 }
 
+/** Mean status weight of the checks, scaled to 60 points. */
+function checkBaseScore(checks: readonly Check[]): number {
+  return (checks.reduce((sum, c) => sum + STATUS_WEIGHT[c.status], 0) / checks.length) * 60;
+}
+
 /** Scores robots.txt syntax, sitemap, crawl-delay, and AI crawler access. */
 export function analyzeRobots(parsed: ParsedRobots, requestPath = '/'): RobotsAnalysis {
   const { groups, sitemaps, syntaxErrors } = parsed;
   const checks: Check[] = [];
 
-  // Syntax check
   const hasSyntaxErrors = syntaxErrors.length > 0;
 
   checks.push({
@@ -61,8 +65,6 @@ export function analyzeRobots(parsed: ParsedRobots, requestPath = '/'): RobotsAn
     detail: hasSyntaxErrors ? syntaxErrors.slice(0, 3).join('; ') : 'valid',
     value: hasSyntaxErrors ? String(syntaxErrors.length) : undefined,
   });
-  // Default User-agent rule
-
   const hasDefault = groups.some((g) => g.userAgents.includes('*'));
 
   checks.push({
@@ -71,16 +73,12 @@ export function analyzeRobots(parsed: ParsedRobots, requestPath = '/'): RobotsAn
     status: hasDefault ? 'pass' : 'warn',
     detail: hasDefault ? 'present' : 'missing',
   });
-  // Sitemap declared
-
   checks.push({
     id: 'sitemap',
     label: 'sitemap',
     status: sitemaps.length > 0 ? 'pass' : 'warn',
     detail: sitemaps.length > 0 ? sitemaps[0] : 'missing',
   });
-  // Crawl-delay check
-
   const highDelay = groups.find((g) => g.crawlDelay !== undefined && g.crawlDelay > 10);
 
   checks.push({
@@ -90,17 +88,12 @@ export function analyzeRobots(parsed: ParsedRobots, requestPath = '/'): RobotsAn
     detail: highDelay ? `${highDelay.crawlDelay}s` : 'ok',
     value: highDelay ? String(highDelay.crawlDelay) : undefined,
   });
-  // Crawler results
-
   const crawlers: CrawlerResult[] = AI_CRAWLERS.map((crawler) => {
     const access = agentAccess(groups, crawler.userAgent, requestPath);
 
     return { ...crawler, access, allowed: access === 'allowed' };
   });
-  // Score calculation
-
-  const passWeight: Record<CheckStatus, number> = { pass: 1, warn: 0.5, fail: 0 };
-  const baseScore = (checks.reduce((sum, c) => sum + passWeight[c.status], 0) / checks.length) * 60;
+  const baseScore = checkBaseScore(checks);
 
   const criticalCrawlers = crawlers.filter((c) => c.geoImpact === 'critical');
   const highCrawlers = crawlers.filter((c) => c.geoImpact === 'high');
@@ -128,9 +121,7 @@ export function analyzeAbsentRobots(): RobotsAnalysis {
     },
     ...base.checks,
   ];
-  const passWeight: Record<CheckStatus, number> = { pass: 1, warn: 0.5, fail: 0 };
-  const baseScore = (checks.reduce((sum, c) => sum + passWeight[c.status], 0) / checks.length) * 60;
-  const score = Math.round(Math.min(100, baseScore + 40));
+  const score = Math.round(Math.min(100, checkBaseScore(checks) + 40));
 
   return {
     ...base,

@@ -72,7 +72,6 @@ function naturalInnerWidths(headers: string[], rows: string[][]): number[] {
  * Front columns stay `null` (auto-size, no wrap) unless they exceed FRONT_CAP.
  * The last column is numbered so wordWrap runs there only.
  */
-
 function planColWidths(headers: string[], rows: string[][]): (number | null)[] {
   const n = headers.length;
   const inner = naturalInnerWidths(headers, rows);
@@ -84,7 +83,6 @@ function planColWidths(headers: string[], rows: string[][]): (number | null)[] {
 }
 
 /** Indents every line of a block (empty string stays empty). */
-
 function indentBlock(block: string): string {
   if (!block) {
     return '';

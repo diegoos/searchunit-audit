@@ -26,7 +26,6 @@ function isSchemaObject(value: unknown): value is Record<string, unknown> {
 }
 
 /** Returns true for parseable absolute URL strings in schema property values. */
-
 function isAbsoluteUrl(val: unknown): boolean {
   return typeof val === 'string' && URL.canParse(val);
 }
@@ -60,8 +59,7 @@ function contextCheckDetail(context: unknown, hasContext: boolean): string {
 }
 
 /** Reads a top-level property from a JSON-LD node object. */
-
-function deepGet(obj: unknown, key: string): unknown {
+function readProp(obj: unknown, key: string): unknown {
   if (!obj || typeof obj !== 'object') {
     return undefined;
   }
@@ -82,26 +80,22 @@ function schemaPropPresent(val: unknown): boolean {
   return true;
 }
 
-// JSON-LD often wraps several entities in `@graph`; required/recommended props
-
-// live on those nodes, not on the top-level object. Resolve the inspectable
-
-// nodes so prop checks target the right entity.
-
+/**
+ * JSON-LD often wraps several entities in `@graph`; required/recommended props
+ * live on those nodes, not on the top-level object. Resolve the inspectable
+ * nodes so prop checks target the right entity.
+ */
 function getNodes(obj: Record<string, unknown>): Record<string, unknown>[] {
   const graph = obj['@graph'];
 
   if (Array.isArray(graph)) {
-    return graph.filter(
-      (n): n is Record<string, unknown> => !!n && typeof n === 'object' && !Array.isArray(n),
-    );
+    return graph.filter(isSchemaObject);
   }
 
   return [obj];
 }
 
 /** Returns true when a node declares the given schema.org @type. */
-
 function nodeHasType(node: Record<string, unknown>, type: string): boolean {
   const t = node['@type'];
 
@@ -163,35 +157,30 @@ function typeCheck(types: string[]): Check {
   return { id: 'type', label: 'type', status, detail, value: types.join(', ') };
 }
 
-function propertyChecks(node: Record<string, unknown>, mainType: string | undefined): Check[] {
-  if (!mainType) {
-    return [];
-  }
+function missingProps(node: Record<string, unknown>, props: string[]): string[] {
+  return props.filter((prop) => !schemaPropPresent(readProp(node, prop)));
+}
 
-  const rules = getRulesForType(mainType);
+/** Passes when no listed prop is missing; otherwise reports the missing names at `failStatus`. */
+function propCheck(id: string, missing: string[], failStatus: CheckStatus): Check {
+  return {
+    id,
+    label: id,
+    status: missing.length === 0 ? 'pass' : failStatus,
+    detail: missing.length === 0 ? 'all present' : missing.join(', '),
+  };
+}
+
+function propertyChecks(node: Record<string, unknown>, mainType: string | undefined): Check[] {
+  const rules = mainType ? getRulesForType(mainType) : null;
 
   if (!rules) {
     return [];
   }
 
-  const missingRequired = rules.required.filter((prop) => !schemaPropPresent(deepGet(node, prop)));
-  const missingRecommended = rules.recommended.filter(
-    (prop) => !schemaPropPresent(deepGet(node, prop)),
-  );
-
   return [
-    {
-      id: 'required_props',
-      label: 'required_props',
-      status: missingRequired.length === 0 ? 'pass' : 'fail',
-      detail: missingRequired.length === 0 ? 'all present' : missingRequired.join(', '),
-    },
-    {
-      id: 'recommended_props',
-      label: 'recommended_props',
-      status: missingRecommended.length === 0 ? 'pass' : 'warn',
-      detail: missingRecommended.length === 0 ? 'all present' : missingRecommended.join(', '),
-    },
+    propCheck('required_props', missingProps(node, rules.required), 'fail'),
+    propCheck('recommended_props', missingProps(node, rules.recommended), 'warn'),
   ];
 }
 
@@ -204,7 +193,7 @@ function authorIsObject(author: unknown): boolean {
 }
 
 function authorCheck(node: Record<string, unknown>): Check {
-  const author = deepGet(node, 'author');
+  const author = readProp(node, 'author');
   let status: CheckStatus = 'warn';
   let detail = 'missing';
 
@@ -221,7 +210,7 @@ function authorCheck(node: Record<string, unknown>): Check {
 }
 
 function datesCheck(node: Record<string, unknown>): Check {
-  const dateModified = deepGet(node, 'dateModified');
+  const dateModified = readProp(node, 'dateModified');
   const dateModifiedOk = typeof dateModified === 'string' && ISO_DATE_RE.test(dateModified);
   let status: CheckStatus = 'warn';
   let detail = `unexpected format: ${dateModified}`;
@@ -246,7 +235,7 @@ function articleChecks(node: Record<string, unknown>, types: string[]): Check[] 
 
 function absoluteUrlCheck(node: Record<string, unknown>): Check {
   const relativeUrls = URL_FIELDS.filter((field) => {
-    const value = deepGet(node, field);
+    const value = readProp(node, field);
     const values = Array.isArray(value) ? value : [value];
 
     return values.some((item) => typeof item === 'string' && item && !isAbsoluteUrl(item));

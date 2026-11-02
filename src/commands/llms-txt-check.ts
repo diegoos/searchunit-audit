@@ -1,11 +1,10 @@
 import type { CliFlags } from '../lib/args.ts';
 import {
   fetchPublicUrl,
-  formatFetchError,
   classifyWellKnownFetch,
+  throwIfRefusedFetch,
   type FetchOutcome,
 } from '../lib/fetch.ts';
-import { CliError } from '../lib/errors.ts';
 import { emitCheckOutput, failOnExitCode, toCheckRow, type CheckRow } from '../lib/output.ts';
 import { withProgress } from '../lib/progress.ts';
 import { requireHttpUrl } from '../lib/url.ts';
@@ -157,9 +156,7 @@ export async function runLlmsTxtCheck(
       fetchPublicUrl(`${origin}/llms-full.txt`, { allowHttpErrors: true }),
     ]);
 
-    if (!llms.ok && (llms.error === 'blocked' || llms.error === 'invalid_url')) {
-      throw new CliError(formatFetchError(llms));
-    }
+    throwIfRefusedFetch(llms);
 
     return analysisForLlmsOutcome(llms, full);
   });

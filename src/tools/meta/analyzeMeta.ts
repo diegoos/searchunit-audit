@@ -12,7 +12,6 @@ export interface MetaAnalysis {
 }
 
 /** Maps string length to pass/warn/fail against ideal and tolerance ranges. */
-
 function charRange(
   value: string | undefined,
   min: number,
@@ -38,7 +37,6 @@ function charRange(
 }
 
 /** Length plus the ideal range when the value is outside it. */
-
 function lengthDetail(value: string | undefined, min: number, max: number): string {
   if (!value) {
     return 'missing';
@@ -51,6 +49,33 @@ function lengthDetail(value: string | undefined, min: number, max: number): stri
   }
 
   return `${len} chars (ideal ${min}–${max})`;
+}
+
+function tagCheck(
+  id: string,
+  status: CheckStatus,
+  detail: string,
+  value: string | undefined,
+): Check {
+  return { id, label: id, status, detail, value };
+}
+
+/** Passes when the tag has a value; otherwise reports `missingStatus`. */
+function presenceCheck(id: string, value: string | undefined, missingStatus: CheckStatus): Check {
+  return tagCheck(id, value ? 'pass' : missingStatus, value ?? 'missing', value);
+}
+
+/** Twitter tag that falls back to its Open Graph twin when the Twitter tag is absent. */
+function fallbackCheck(
+  id: string,
+  value: string | undefined,
+  fallback: string | undefined,
+  fallbackName: string,
+): Check {
+  const status: CheckStatus = value || fallback ? 'pass' : 'warn';
+  const detail = value ?? (fallback ? `falls back to ${fallbackName}` : 'missing');
+
+  return tagCheck(id, status, detail, value ?? fallback);
 }
 
 /**
@@ -114,149 +139,78 @@ function ogUrlCheck(tags: MetaTags, pageUrl: string): Check {
   return { ...base, status: 'pass', detail: tags.ogUrl };
 }
 
-/** Scores meta tag presence and length against SEO best-practice thresholds. */
-
-// eslint-disable-next-line complexity -- one check per meta field of the same catalog
-export function analyzeMeta(tags: MetaTags, pageUrl: string): MetaAnalysis {
-  const checks: Check[] = [];
-
-  // Title — 50-60 chars ideal, warn 10-70
-  const titleStatus = charRange(tags.title, 50, 60, 10, 70);
-
-  checks.push({
-    id: 'title',
-    label: 'title',
-    status: titleStatus,
-    detail: lengthDetail(tags.title, 50, 60),
-    value: tags.title,
-  });
-  // Description — 150-160 ideal, warn 70-165
-
-  const descStatus = charRange(tags.description, 150, 160, 70, 165);
-
-  checks.push({
-    id: 'description',
-    label: 'description',
-    status: descStatus,
-    detail: lengthDetail(tags.description, 150, 160),
-    value: tags.description,
-  });
-  checks.push(canonicalCheck(tags.canonical, pageUrl));
-  // Viewport
-
-  const viewportOk = tags.viewport?.includes('width=device-width');
-  let viewportStatus: CheckStatus = 'fail';
-
-  if (viewportOk) {
-    viewportStatus = 'pass';
-  } else if (tags.viewport) {
-    viewportStatus = 'warn';
+/** Viewport passes only with `width=device-width`; any other viewport is a warn. */
+function viewportCheck(viewport: string | undefined): Check {
+  if (viewport?.includes('width=device-width')) {
+    return tagCheck('viewport', 'pass', viewport, viewport);
   }
 
-  checks.push({
-    id: 'viewport',
-    label: 'viewport',
-    status: viewportStatus,
-    detail: tags.viewport ?? 'missing',
-    value: tags.viewport,
-  });
-  // Lang
+  return tagCheck('viewport', viewport ? 'warn' : 'fail', viewport ?? 'missing', viewport);
+}
 
-  checks.push({
-    id: 'lang',
-    label: 'lang',
-    status: tags.lang ? 'pass' : 'warn',
-    detail: tags.lang ?? 'missing',
-    value: tags.lang,
-  });
-  // Robots meta — flag noindex
-
+/** Flags `noindex` / `none` in the page robots meta or in an indexer bot meta. */
+function robotsMetaCheck(tags: MetaTags): Check {
   const botNoindex = Object.entries(tags.botRobots ?? {}).some(
     ([bot, content]) => isIndexerBot(bot) && hasNoindexDirective(content),
   );
   const hasNoindex = hasNoindexDirective(tags.robotsMeta) || botNoindex;
+  const detail = tags.robotsMeta ?? (botNoindex ? 'bot noindex' : 'index, follow (default)');
 
-  checks.push({
-    id: 'robots_meta',
-    label: 'robots_meta',
-    status: hasNoindex ? 'fail' : 'pass',
-    detail: tags.robotsMeta ?? (botNoindex ? 'bot noindex' : 'index, follow (default)'),
-    value: tags.robotsMeta,
-  });
-  // OG: title
+  return tagCheck('robots_meta', hasNoindex ? 'fail' : 'pass', detail, tags.robotsMeta);
+}
 
-  checks.push({
-    id: 'og_title',
-    label: 'og_title',
-    status: tags.ogTitle ? 'pass' : 'fail',
-    detail: tags.ogTitle ?? 'missing',
-    value: tags.ogTitle,
-  });
-  // OG: description
+function headChecks(tags: MetaTags, pageUrl: string): Check[] {
+  return [
+    tagCheck(
+      'title',
+      charRange(tags.title, 50, 60, 10, 70),
+      lengthDetail(tags.title, 50, 60),
+      tags.title,
+    ),
+    tagCheck(
+      'description',
+      charRange(tags.description, 150, 160, 70, 165),
+      lengthDetail(tags.description, 150, 160),
+      tags.description,
+    ),
+    canonicalCheck(tags.canonical, pageUrl),
+    viewportCheck(tags.viewport),
+    presenceCheck('lang', tags.lang, 'warn'),
+  ];
+}
 
-  checks.push({
-    id: 'og_description',
-    label: 'og_description',
-    status: tags.ogDescription ? 'pass' : 'fail',
-    detail: tags.ogDescription ?? 'missing',
-    value: tags.ogDescription,
-  });
-  // OG: image
+function openGraphChecks(tags: MetaTags, pageUrl: string): Check[] {
+  return [
+    presenceCheck('og_title', tags.ogTitle, 'fail'),
+    presenceCheck('og_description', tags.ogDescription, 'fail'),
+    presenceCheck('og_image', tags.ogImage, 'warn'),
+    ogUrlCheck(tags, pageUrl),
+    presenceCheck('og_type', tags.ogType, 'warn'),
+  ];
+}
 
-  checks.push({
-    id: 'og_image',
-    label: 'og_image',
-    status: tags.ogImage ? 'pass' : 'warn',
-    detail: tags.ogImage ?? 'missing',
-    value: tags.ogImage,
-  });
-  checks.push(ogUrlCheck(tags, pageUrl));
-  // OG: type
+function twitterChecks(tags: MetaTags): Check[] {
+  return [
+    presenceCheck('twitter_card', tags.twitterCard, 'warn'),
+    fallbackCheck('twitter_title', tags.twitterTitle, tags.ogTitle, 'og:title'),
+    fallbackCheck(
+      'twitter_description',
+      tags.twitterDescription,
+      tags.ogDescription,
+      'og:description',
+    ),
+    fallbackCheck('twitter_image', tags.twitterImage, tags.ogImage, 'og:image'),
+  ];
+}
 
-  checks.push({
-    id: 'og_type',
-    label: 'og_type',
-    status: tags.ogType ? 'pass' : 'warn',
-    detail: tags.ogType ?? 'missing',
-    value: tags.ogType,
-  });
-  // Twitter: card
-
-  checks.push({
-    id: 'twitter_card',
-    label: 'twitter_card',
-    status: tags.twitterCard ? 'pass' : 'warn',
-    detail: tags.twitterCard ?? 'missing',
-    value: tags.twitterCard,
-  });
-  // Twitter: title
-
-  checks.push({
-    id: 'twitter_title',
-    label: 'twitter_title',
-    status: tags.twitterTitle || tags.ogTitle ? 'pass' : 'warn',
-    detail: tags.twitterTitle ?? (tags.ogTitle ? 'falls back to og:title' : 'missing'),
-    value: tags.twitterTitle ?? tags.ogTitle,
-  });
-  // Twitter: description
-
-  checks.push({
-    id: 'twitter_description',
-    label: 'twitter_description',
-    status: tags.twitterDescription || tags.ogDescription ? 'pass' : 'warn',
-    detail:
-      tags.twitterDescription ?? (tags.ogDescription ? 'falls back to og:description' : 'missing'),
-    value: tags.twitterDescription ?? tags.ogDescription,
-  });
-  // Twitter: image
-
-  checks.push({
-    id: 'twitter_image',
-    label: 'twitter_image',
-    status: tags.twitterImage || tags.ogImage ? 'pass' : 'warn',
-    detail: tags.twitterImage ?? (tags.ogImage ? 'falls back to og:image' : 'missing'),
-    value: tags.twitterImage ?? tags.ogImage,
-  });
+/** Scores meta tag presence and length against SEO best-practice thresholds. */
+export function analyzeMeta(tags: MetaTags, pageUrl: string): MetaAnalysis {
+  const checks: Check[] = [
+    ...headChecks(tags, pageUrl),
+    robotsMetaCheck(tags),
+    ...openGraphChecks(tags, pageUrl),
+    ...twitterChecks(tags),
+  ];
   const score = statusWeightedScore(checks);
   const overallStatus = scoreToCheckStatus(score);
 

@@ -49,11 +49,15 @@ export function cruxApiKeyLabel(available = cruxApiKeyAvailable()): string {
   return available ? 'CRUX_API_KEY available' : 'CRUX_API_KEY missing';
 }
 
+/** One key's value in each source: cwd file, `$HOME` file, and the CLI default. */
+export interface ConfigLayerValues {
+  local: string | undefined;
+  global: string | undefined;
+  default: string | undefined;
+}
+
 /** Value the CLI uses after merge (matches `loadConfig`). */
-export function effectiveConfigValue(
-  key: ConfigKey,
-  layer: { local: string | undefined; global: string | undefined; default: string | undefined },
-): string | undefined {
+export function effectiveConfigValue(key: ConfigKey, layer: ConfigLayerValues): string | undefined {
   if (isHomeOnlyConfigKey(key)) {
     const env = process.env[HOME_ONLY_ENV[key]]?.trim();
 
@@ -74,7 +78,6 @@ const CONFIG_DEFAULTS: Partial<Record<ConfigKey, string>> = {
 };
 
 /** YAML keys that map onto one canonical config key. */
-
 function aliasNames(key: ConfigKey): readonly string[] {
   if (isHomeOnlyConfigKey(key)) {
     return [key, HOME_ONLY_ENV[key]];
@@ -152,10 +155,7 @@ export function configFilePath(opts: { global?: boolean; cwd?: string; home?: st
 }
 
 /** Local, `$HOME`, and CLI-default values for one config key. */
-export function configLayerValues(
-  key: ConfigKey,
-  opts: LoadConfigOptions = {},
-): { local: string | undefined; global: string | undefined; default: string | undefined } {
+export function configLayerValues(key: ConfigKey, opts: LoadConfigOptions = {}): ConfigLayerValues {
   return {
     local: mappingGet(readConfigMapping(configFilePath({ ...opts, global: false })) ?? {}, key),
     global: mappingGet(readConfigMapping(configFilePath({ ...opts, global: true })) ?? {}, key),

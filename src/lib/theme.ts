@@ -51,15 +51,7 @@ const WARN_SCORE = 40;
 
 /** Colors a score string: green ≥70, yellow ≥40, red below. */
 export function paintScore(score: number, text: string): string {
-  if (score >= PASS_SCORE) {
-    return chalk.green(text);
-  }
-
-  if (score >= WARN_SCORE) {
-    return chalk.yellow(text);
-  }
-
-  return chalk.red(text);
+  return paintStatus(scoreStatus(score), text);
 }
 
 /** One-line legend matching table marks (`ok`/`!`/`x` when colorless). */
@@ -161,7 +153,5 @@ export function humanizeLabel(id: string): string {
     return LABELS[id];
   }
 
-  const spaced = id.replaceAll('_', ' ').replace(/([a-z])([A-Z])/g, '$1 $2');
-
-  return spaced;
+  return id.replaceAll('_', ' ').replace(/([a-z])([A-Z])/g, '$1 $2');
 }

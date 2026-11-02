@@ -10,7 +10,6 @@ export interface ParsedSchemaBlock {
 }
 
 /** Recursively collects @type values from a JSON-LD object or @graph array. */
-
 function extractTypes(json: unknown): string[] {
   if (!json || typeof json !== 'object') {
     return [];
@@ -19,7 +18,7 @@ function extractTypes(json: unknown): string[] {
   const obj = json as Record<string, unknown>;
 
   if (Array.isArray(obj['@graph'])) {
-    return (obj['@graph'] as unknown[]).flatMap((item) => extractTypes(item));
+    return obj['@graph'].flatMap((item) => extractTypes(item));
   }
 
   const type = obj['@type'];
@@ -36,7 +35,6 @@ function extractTypes(json: unknown): string[] {
 }
 
 /** Expands @graph / top-level arrays into inspectable JSON-LD nodes. */
-
 function expandNodes(json: unknown, context?: unknown): unknown[] {
   if (Array.isArray(json)) {
     return json.flatMap((node) => expandNodes(node, context));
@@ -106,34 +104,27 @@ export function parseSchemaFromScripts(
 ): ParsedSchemaBlock[] {
   const blocks: ParsedSchemaBlock[] = [];
   let index = 0;
-
+  const addBlock = (block: Omit<ParsedSchemaBlock, 'index'>): void => {
+    blocks.push({ index, ...block });
+    index++;
+  };
   for (const script of scripts) {
     if (script.json === undefined) {
-      blocks.push({
-        index,
-        raw: script.raw,
-        json: null,
-        parseError: 'invalid JSON',
-        types: [],
-      });
-      index++;
+      addBlock({ raw: script.raw, json: null, parseError: 'invalid JSON', types: [] });
       continue;
     }
 
     try {
       for (const node of expandNodes(script.json)) {
-        blocks.push({ index, raw: script.raw, json: node, types: extractTypes(node) });
-        index++;
+        addBlock({ raw: script.raw, json: node, types: extractTypes(node) });
       }
     } catch (err) {
-      blocks.push({
-        index,
+      addBlock({
         raw: script.raw,
         json: null,
         parseError: err instanceof SyntaxError ? err.message : 'invalid JSON',
         types: [],
       });
-      index++;
     }
   }
 

@@ -7,10 +7,8 @@ import {
   HEADER_DISPLAY_NAMES,
   HSTS_RECOMMENDED_MAX_AGE,
   CSP_UNSAFE_DIRECTIVES,
-  REFERRER_SAFE_VALUES,
-  REFERRER_WARN_VALUES,
-  REFERRER_UNSAFE_VALUES,
   REFERRER_KNOWN_VALUES,
+  REFERRER_SAFE_VALUES,
   LETTER_GRADE_THRESHOLDS,
   BONUS_HSTS_PRELOAD,
   BONUS_CSP_NO_UNSAFE,
@@ -21,11 +19,21 @@ import {
 } from './securityHeadersRules';
 
 /** Module-level set for O(1) scoring-header membership checks. */
-
 const SCORING_HEADER_ID_SET = new Set<string>(SCORING_HEADER_IDS);
 
 const OBSERVATORY_DOCS_URL =
   'https://developer.mozilla.org/en-US/observatory/docs/tests_and_scoring';
+
+/** Score floor of each graded letter below A+, highest first. */
+const GRADE_FLOORS: [LetterGrade, number][] = [
+  ['A', LETTER_GRADE_THRESHOLDS.A],
+  ['B+', LETTER_GRADE_THRESHOLDS.B_PLUS],
+  ['B', LETTER_GRADE_THRESHOLDS.B],
+  ['C+', LETTER_GRADE_THRESHOLDS.C_PLUS],
+  ['C', LETTER_GRADE_THRESHOLDS.C],
+  ['D+', LETTER_GRADE_THRESHOLDS.D_PLUS],
+  ['D', LETTER_GRADE_THRESHOLDS.D],
+];
 
 interface SecurityHeadersCheck extends Omit<Check, 'value' | 'status'> {
   headerName: string;
@@ -72,35 +80,7 @@ export function scoreToLetterGrade(
     return 'A+';
   }
 
-  if (score >= LETTER_GRADE_THRESHOLDS.A) {
-    return 'A';
-  }
-
-  if (score >= LETTER_GRADE_THRESHOLDS.B_PLUS) {
-    return 'B+';
-  }
-
-  if (score >= LETTER_GRADE_THRESHOLDS.B) {
-    return 'B';
-  }
-
-  if (score >= LETTER_GRADE_THRESHOLDS.C_PLUS) {
-    return 'C+';
-  }
-
-  if (score >= LETTER_GRADE_THRESHOLDS.C) {
-    return 'C';
-  }
-
-  if (score >= LETTER_GRADE_THRESHOLDS.D_PLUS) {
-    return 'D+';
-  }
-
-  if (score >= LETTER_GRADE_THRESHOLDS.D) {
-    return 'D';
-  }
-
-  return 'F';
+  return GRADE_FLOORS.find(([, floor]) => score >= floor)?.[0] ?? 'F';
 }
 
 /** Main analyzer entry point. Pure, deterministic, side-effect free. */
@@ -129,12 +109,11 @@ export function analyzeSecurityHeaders(
   const hstsParsed = parseHstsDirectives(headers.hsts);
   const cspEnforcement = hasHeaderValue(headers.csp) ? headers.csp : null;
   const cspDirectives = parseCspDirectives(cspEnforcement);
-  const cspFrameAncestors = cspDirectives.has('frame-ancestors');
 
   const checks: SecurityHeadersCheck[] = [
     checkHsts(headers.hsts, ctx.https, hstsParsed),
     checkCsp(cspEnforcement, headers.cspReportOnly, cspDirectives),
-    checkXFrame(headers.xFrame, cspFrameAncestors),
+    checkXFrame(headers.xFrame, cspDirectives.has('frame-ancestors')),
     checkXContentType(headers.xContentType),
     checkReferrerPolicy(headers.referrerPolicy),
     checkPermissionsPolicy(headers.permissionsPolicy),
@@ -147,45 +126,13 @@ export function analyzeSecurityHeaders(
       'same-origin',
       'same-site',
     ]),
-    checkXRobotsTag(headers.xRobotsTag),
+    makeCheck('x-robots-tag', 'pass', headers.xRobotsTag),
     observatoryInfoCheck(),
   ];
 
   const scoringChecks = checks.filter((c) => SCORING_HEADER_ID_SET.has(c.id));
-  let penalties = 0;
-
-  for (const check of scoringChecks) {
-    const penalty = HEADER_PENALTIES[check.id as SecurityHeaderId];
-
-    if (check.status === 'fail') {
-      penalties += penalty;
-    } else if (check.status === 'warn') {
-      penalties += 0.5 * penalty;
-    }
-  }
-
-  let bonuses = 0;
-
-  // Preload bonus only when the site is preload-list eligible (max-age + includeSubDomains).
-
-  if (
-    hstsParsed.preload &&
-    hstsParsed.includeSubDomains &&
-    hstsParsed.maxAge !== null &&
-    hstsParsed.maxAge >= HSTS_RECOMMENDED_MAX_AGE
-  ) {
-    bonuses += BONUS_HSTS_PRELOAD;
-  }
-
-  const cspCheck = checks.find((c) => c.id === 'content-security-policy');
-
-  if (cspCheck?.status === 'pass') {
-    bonuses += BONUS_CSP_NO_UNSAFE;
-  }
-
-  if (headers.permissionsPolicy && hasInterestCohortOptOut(headers.permissionsPolicy)) {
-    bonuses += BONUS_PERMISSIONS_POLICY_FLOC_OPTOUT;
-  }
+  const penalties = penaltyPoints(scoringChecks);
+  const bonuses = bonusPoints(hstsParsed, checks, headers.permissionsPolicy);
 
   let score = Math.min(100, Math.max(0, 100 - penalties + bonuses));
 
@@ -200,7 +147,6 @@ export function analyzeSecurityHeaders(
     redirectNotFollowed: false,
   });
   // `present` = scoring checks with status pass (not raw header presence).
-
   const present = scoringChecks.filter((c) => c.status === 'pass').length;
 
   return {
@@ -212,6 +158,53 @@ export function analyzeSecurityHeaders(
     checks,
     summary: { present, total: SCORING_HEADER_IDS.length },
   };
+}
+
+/** Penalty for failed checks (full weight) and warned checks (half weight). */
+function penaltyPoints(scoringChecks: readonly SecurityHeadersCheck[]): number {
+  let penalties = 0;
+
+  for (const check of scoringChecks) {
+    const penalty = HEADER_PENALTIES[check.id as SecurityHeaderId];
+
+    if (check.status === 'fail') {
+      penalties += penalty;
+    } else if (check.status === 'warn') {
+      penalties += 0.5 * penalty;
+    }
+  }
+
+  return penalties;
+}
+
+/** Bonus points for HSTS preload eligibility, a clean CSP, and the FLoC opt-out. */
+function bonusPoints(
+  hsts: HstsDirectives,
+  checks: readonly SecurityHeadersCheck[],
+  permissionsPolicy: string | null,
+): number {
+  let bonuses = 0;
+
+  // Preload bonus only when the site is preload-list eligible (max-age + includeSubDomains).
+
+  if (
+    hsts.preload &&
+    hsts.includeSubDomains &&
+    hsts.maxAge !== null &&
+    hsts.maxAge >= HSTS_RECOMMENDED_MAX_AGE
+  ) {
+    bonuses += BONUS_HSTS_PRELOAD;
+  }
+
+  if (checks.find((c) => c.id === 'content-security-policy')?.status === 'pass') {
+    bonuses += BONUS_CSP_NO_UNSAFE;
+  }
+
+  if (permissionsPolicy && hasInterestCohortOptOut(permissionsPolicy)) {
+    bonuses += BONUS_PERMISSIONS_POLICY_FLOC_OPTOUT;
+  }
+
+  return bonuses;
 }
 
 function observatoryInfoCheck(): SecurityHeadersCheck {
@@ -230,7 +223,6 @@ function hasHeaderValue(value: string | null): value is string {
 }
 
 /** Returns true when Permissions-Policy has an exact interest-cohort=() directive token. */
-
 function hasInterestCohortOptOut(value: string): boolean {
   return value.split(',').some((part) => /^interest-cohort\s*=\s*\(\)$/i.test(part.trim()));
 }
@@ -239,7 +231,6 @@ function hasInterestCohortOptOut(value: string): boolean {
  * Extracts the first comma-separated token (Fetch joins duplicate headers with ", ").
  * Used for XFO / XCTO single-token policies.
  */
-
 function firstCommaToken(value: string): string {
   return value.split(',')[0]?.trim().toLowerCase() ?? '';
 }
@@ -249,13 +240,24 @@ function firstCommaToken(value: string): string {
  * Fetch may join duplicate headers with ", "; take the first header value,
  * then ignore parameters such as `report-to` after `;`.
  */
-
 function primaryPolicyToken(value: string): string {
   return value.split(',')[0]?.split(';')[0]?.trim().toLowerCase() ?? '';
 }
 
-/** Strips optional single quotes from a CSP source token for unsafe directive matching. */
+/**
+ * Last token of a Referrer-Policy value that the W3C spec recognizes. W3C ignores
+ * unknown tokens, so an unknown token after a known one does not change the policy.
+ */
+function lastKnownReferrerToken(value: string): string {
+  const tokens = value
+    .split(',')
+    .map((t) => t.trim().toLowerCase())
+    .filter(Boolean);
 
+  return tokens.findLast((token) => REFERRER_KNOWN_VALUES.has(token)) ?? '';
+}
+
+/** Strips optional single quotes from a CSP source token for unsafe directive matching. */
 function normalizeCspSource(source: string): string {
   const trimmed = source.trim();
 
@@ -272,7 +274,6 @@ function normalizeCspSource(source: string): string {
  * `object-src` does **not** inherit for scoring — omitted object-src with a
  * safe script-src must not warn on default-src `'unsafe-inline'` (styles).
  */
-
 function getEffectiveCspSources(
   directives: Map<string, string[]>,
   name: 'script-src' | 'object-src',
@@ -289,14 +290,12 @@ function getEffectiveCspSources(
 }
 
 /** Collects unsafe tokens from script-src and object-src (script inherits default-src). */
-
 function findCspUnsafeSources(directives: Map<string, string[]>): string[] {
   const unsafeFound: string[] = [];
 
   for (const name of ['script-src', 'object-src'] as const) {
     for (const source of getEffectiveCspSources(directives, name)) {
       const normalized = normalizeCspSource(source);
-
       const isUnsafe = CSP_UNSAFE_DIRECTIVES.includes(
         normalized as (typeof CSP_UNSAFE_DIRECTIVES)[number],
       );
@@ -310,16 +309,19 @@ function findCspUnsafeSources(directives: Map<string, string[]>): string[] {
   return unsafeFound;
 }
 
-type MakeCheckPartial = Omit<SecurityHeadersCheck, 'id' | 'label' | 'headerName' | 'detail'> &
-  Partial<Pick<SecurityHeadersCheck, 'detail'>>;
-
-function makeCheck(id: SecurityHeaderId, partial: MakeCheckPartial): SecurityHeadersCheck {
+/** Check row for one header. Detail is the raw value, or `missing` when there is none. */
+function makeCheck(
+  id: SecurityHeaderId,
+  status: CheckStatus,
+  value: string | null,
+): SecurityHeadersCheck {
   return {
     id,
     label: id,
     headerName: HEADER_DISPLAY_NAMES[id],
-    ...partial,
-    detail: partial.detail || (partial.value ? String(partial.value) : 'missing'),
+    status,
+    value,
+    detail: value ? String(value) : 'missing',
   };
 }
 
@@ -331,51 +333,26 @@ function checkHsts(
   const id = 'strict-transport-security' as const;
 
   if (!https) {
-    return makeCheck(id, {
-      status: 'fail',
-      value,
-    });
+    return makeCheck(id, 'fail', value);
   }
 
   if (!hasHeaderValue(value)) {
-    return makeCheck(id, {
-      status: 'fail',
-      value: null,
-    });
+    return makeCheck(id, 'fail', null);
   }
 
-  if (parsed.maxAge === null) {
-    return makeCheck(id, {
-      status: 'fail',
-      value,
-    });
+  return makeCheck(id, hstsStatus(parsed), value);
+}
+
+function hstsStatus(parsed: HstsDirectives): CheckStatus {
+  if (parsed.maxAge === null || parsed.maxAge === 0) {
+    return 'fail';
   }
 
-  if (parsed.maxAge === 0) {
-    return makeCheck(id, {
-      status: 'fail',
-      value,
-    });
+  if (parsed.maxAge < HSTS_RECOMMENDED_MAX_AGE || !parsed.includeSubDomains) {
+    return 'warn';
   }
 
-  if (parsed.maxAge < HSTS_RECOMMENDED_MAX_AGE) {
-    return makeCheck(id, {
-      status: 'warn',
-      value,
-    });
-  }
-
-  if (!parsed.includeSubDomains) {
-    return makeCheck(id, {
-      status: 'warn',
-      value,
-    });
-  }
-
-  return makeCheck(id, {
-    status: 'pass',
-    value,
-  });
+  return 'pass';
 }
 
 function checkCsp(
@@ -384,184 +361,81 @@ function checkCsp(
   directives: Map<string, string[]>,
 ): SecurityHeadersCheck {
   const id = 'content-security-policy' as const;
-  const ro = hasHeaderValue(reportOnly) ? reportOnly : null;
 
-  if (enforcement === null && ro === null) {
-    return makeCheck(id, {
-      status: 'fail',
-      value: null,
-    });
+  if (enforcement === null) {
+    return hasHeaderValue(reportOnly)
+      ? makeCheck(id, 'warn', reportOnly)
+      : makeCheck(id, 'fail', null);
   }
 
-  if (enforcement === null && ro !== null) {
-    return makeCheck(id, {
-      status: 'warn',
-      value: ro,
-    });
+  return makeCheck(id, cspEnforcementStatus(directives), enforcement);
+}
+
+function cspEnforcementStatus(directives: Map<string, string[]>): CheckStatus {
+  if (!directives.has('default-src') && !directives.has('script-src')) {
+    return 'warn';
   }
 
-  const hasDefaultSrc = directives.has('default-src');
-  const hasScriptSrc = directives.has('script-src');
-
-  if (!hasDefaultSrc && !hasScriptSrc) {
-    return makeCheck(id, {
-      status: 'warn',
-      value: enforcement,
-    });
-  }
-
-  const unsafeFound = findCspUnsafeSources(directives);
-
-  if (unsafeFound.length > 0) {
-    return makeCheck(id, {
-      status: 'warn',
-      value: enforcement,
-    });
-  }
-
-  return makeCheck(id, {
-    status: 'pass',
-    value: enforcement,
-  });
+  return findCspUnsafeSources(directives).length > 0 ? 'warn' : 'pass';
 }
 
 function checkXFrame(value: string | null, cspFrameAncestors: boolean): SecurityHeadersCheck {
   const id = 'x-frame-options' as const;
 
   if (cspFrameAncestors) {
-    return makeCheck(id, {
-      status: 'pass',
-      value,
-    });
+    return makeCheck(id, 'pass', value);
   }
 
   if (!hasHeaderValue(value)) {
-    return makeCheck(id, {
-      status: 'fail',
-      value: null,
-    });
+    return makeCheck(id, 'fail', null);
   }
 
   // Fetch joins duplicate XFO headers with ", "; use the first token.
 
   const lc = firstCommaToken(value);
 
-  if (lc === 'deny' || lc === 'sameorigin') {
-    return makeCheck(id, {
-      status: 'pass',
-      value,
-    });
-  }
-
-  return makeCheck(id, {
-    status: 'warn',
-    value,
-  });
+  return makeCheck(id, lc === 'deny' || lc === 'sameorigin' ? 'pass' : 'warn', value);
 }
 
 function checkXContentType(value: string | null): SecurityHeadersCheck {
   const id = 'x-content-type-options' as const;
 
   if (!hasHeaderValue(value)) {
-    return makeCheck(id, {
-      status: 'fail',
-      value: null,
-    });
+    return makeCheck(id, 'fail', null);
   }
 
   // Fetch joins duplicate XCTO headers with ", "; use the first token.
 
-  if (firstCommaToken(value) === 'nosniff') {
-    return makeCheck(id, {
-      status: 'pass',
-      value,
-    });
-  }
-
-  return makeCheck(id, {
-    status: 'warn',
-    value,
-  });
+  return makeCheck(id, firstCommaToken(value) === 'nosniff' ? 'pass' : 'warn', value);
 }
 
 function checkReferrerPolicy(value: string | null): SecurityHeadersCheck {
   const id = 'referrer-policy' as const;
 
   if (!hasHeaderValue(value)) {
-    return makeCheck(id, {
-      status: 'fail',
-      value: null,
-    });
+    return makeCheck(id, 'fail', null);
   }
 
-  // W3C: ignore unknown tokens; apply the last recognized referrer policy.
+  // Only the safe tier passes. Legacy, unsafe, unknown, and `origin` values warn.
 
-  const tokens = value
-    .split(',')
-    .map((t) => t.trim().toLowerCase())
-    .filter(Boolean);
-  let lc = '';
+  const status: CheckStatus = REFERRER_SAFE_VALUES.has(lastKnownReferrerToken(value))
+    ? 'pass'
+    : 'warn';
 
-  for (const token of tokens) {
-    if (REFERRER_KNOWN_VALUES.has(token)) {
-      lc = token;
-    }
-  }
-
-  if (!lc) {
-    return makeCheck(id, {
-      status: 'warn',
-      value,
-    });
-  }
-
-  if (REFERRER_UNSAFE_VALUES.has(lc)) {
-    return makeCheck(id, {
-      status: 'warn',
-      value,
-    });
-  }
-
-  if (REFERRER_WARN_VALUES.has(lc)) {
-    return makeCheck(id, {
-      status: 'warn',
-      value,
-    });
-  }
-
-  if (REFERRER_SAFE_VALUES.has(lc)) {
-    return makeCheck(id, {
-      status: 'pass',
-      value,
-    });
-  }
-
-  // Known but not in safe/legacy/unsafe sets (e.g. `origin`) → warn.
-
-  return makeCheck(id, {
-    status: 'warn',
-    value,
-  });
+  return makeCheck(id, status, value);
 }
 
 function checkPermissionsPolicy(value: string | null): SecurityHeadersCheck {
   const id = 'permissions-policy' as const;
 
   if (!hasHeaderValue(value)) {
-    return makeCheck(id, {
-      status: 'warn',
-      value: null,
-    });
+    return makeCheck(id, 'warn', null);
   }
 
-  return makeCheck(id, {
-    status: 'pass',
-    value,
-  });
+  return makeCheck(id, 'pass', value);
 }
 
 /** Shared COOP / COEP / CORP check: primary token before `;`, allowlist pass. */
-
 function checkCrossOriginPolicy(
   id: Extract<
     SecurityHeaderId,
@@ -571,39 +445,10 @@ function checkCrossOriginPolicy(
   allowed: readonly string[],
 ): SecurityHeadersCheck {
   if (!hasHeaderValue(value)) {
-    return makeCheck(id, {
-      status: 'warn',
-      value: null,
-    });
+    return makeCheck(id, 'warn', null);
   }
 
-  const token = primaryPolicyToken(value);
+  const status: CheckStatus = allowed.includes(primaryPolicyToken(value)) ? 'pass' : 'warn';
 
-  if (allowed.includes(token)) {
-    return makeCheck(id, {
-      status: 'pass',
-      value,
-    });
-  }
-
-  return makeCheck(id, {
-    status: 'warn',
-    value,
-  });
-}
-
-function checkXRobotsTag(value: string | null): SecurityHeadersCheck {
-  const id = 'x-robots-tag' as const;
-
-  if (value === null) {
-    return makeCheck(id, {
-      status: 'pass',
-      value: null,
-    });
-  }
-
-  return makeCheck(id, {
-    status: 'pass',
-    value,
-  });
+  return makeCheck(id, status, value);
 }

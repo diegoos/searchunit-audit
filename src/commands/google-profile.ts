@@ -1,16 +1,13 @@
 import type { CliFlags } from '../lib/args.ts';
 import { CliError } from '../lib/errors.ts';
 import { googleProfileFields, googleProfileSummary } from '../lib/googleProfile.ts';
-
 import { emitCheckOutput, formatToolMarkdown } from '../lib/output.ts';
 import { formatTable } from '../lib/table.ts';
 
 const TITLE = 'Google Profile Finder';
 const EXTRA = 'Builds the Google profile URL for the exact domain you pass (www stays www).';
 
-/**
- * Builds a Google Business Profile URL from a domain (no network fetch).
- */
+/** Builds a Google Business Profile URL from a domain (no network fetch). */
 export async function runGoogleProfile(
   target: string | undefined,
   flags: CliFlags,
@@ -29,18 +26,19 @@ export async function runGoogleProfile(
 
   const fields = googleProfileFields(profile);
   const report = { title: TITLE, url, extra: EXTRA, body: formatTable(['Field', 'Value'], fields) };
+  const fieldsMarkdown = [
+    '| Field | Value |',
+    '| --- | --- |',
+    ...fields.map(([k, v]) => `| ${k} | ${v} |`),
+    '',
+  ].join('\n');
 
   emitCheckOutput(flags, {
     command: 'google-profile',
     url,
     json: { ok: true, command: 'google-profile', ...profile },
     report,
-
-    markdown:
-      formatToolMarkdown(report) +
-      ['| Field | Value |', '| --- | --- |', ...fields.map(([k, v]) => `| ${k} | ${v} |`), ''].join(
-        '\n',
-      ),
+    markdown: formatToolMarkdown(report) + fieldsMarkdown,
   });
 
   return 0;

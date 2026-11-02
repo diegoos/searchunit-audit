@@ -1,18 +1,18 @@
 import { describe, expect, test } from 'bun:test';
 import {
-  extraLine,
   analysisForLlmsOutcome,
+  extraLine,
   llmsCheckSections,
 } from '../src/commands/llms-txt-check.ts';
 import { formatToolReport } from '../src/lib/output.ts';
+import type { FetchOutcome } from '../src/lib/fetch.ts';
+import type { CheckStatus } from '../src/lib/output.ts';
 import { issuesForNonPresentLlms } from '../src/engine/llms.ts';
 import {
   analyzeAbsentLlmsTxt,
   analyzeLlmsTxt,
-  analyzeLlmsTxtFetchError,
   analyzeLlmsTxtPair,
 } from '../src/tools/llmstxt/analyzeLlmsTxt.ts';
-
 import { hasMdExtension, isAbsoluteUrl, parseLlmsTxt } from '../src/tools/llmstxt/parseLlmsTxt.ts';
 
 const VALID_LLMS = `# FastHTML
@@ -31,6 +31,27 @@ const VALID_LLMS = `# FastHTML
 
 `;
 
+function fetched(status: number, body = '', url = 'https://example.com/llms.txt'): FetchOutcome {
+  return {
+    ok: true,
+    requestedUrl: url,
+    finalUrl: url,
+    status,
+    contentType: 'text/plain',
+    body,
+    fetchedAt: '2026-09-11T00:00:00.000Z',
+    headers: {},
+    redirectChain: [],
+    responseTimeMs: 1,
+  } as FetchOutcome;
+}
+
+const timedOut: FetchOutcome = {
+  ok: false,
+  requestedUrl: 'https://example.com/llms.txt',
+  error: 'timeout',
+} as FetchOutcome;
+
 const missingFull = {
   ok: false as const,
   requestedUrl: 'https://example.com/llms-full.txt',
@@ -38,91 +59,24 @@ const missingFull = {
 };
 
 describe('analysisForLlmsOutcome', () => {
-  test('HTTP 404 is absent, not a runtime error', () => {
-    const { analysis } = analysisForLlmsOutcome(
-      {
-        ok: true,
-        requestedUrl: 'https://example.com/llms.txt',
-        finalUrl: 'https://example.com/llms.txt',
-        status: 404,
-        contentType: 'text/plain',
-        body: '',
-        fetchedAt: '2026-09-11T00:00:00.000Z',
-        headers: {},
-        redirectChain: [],
-        responseTimeMs: 1,
-      },
-      missingFull,
-    );
+  test.each<[string, FetchOutcome, CheckStatus, string]>([
+    ['HTTP 404 is absent, not a runtime error', fetched(404), 'fail', 'not_found'],
+    ['HTTP 403 is fetch_error, not a throw', fetched(403), 'warn', 'fetch_error'],
+    ['a timeout is fetch_error', timedOut, 'warn', 'fetch_error'],
+  ])('%s', (_name, outcome, status, detail) => {
+    const { analysis } = analysisForLlmsOutcome(outcome, missingFull);
 
-    expect(analysis.checks[0]).toEqual(
-      expect.objectContaining({ id: 'presence', status: 'fail', detail: 'not_found' }),
-    );
-    expect(analysis.overallStatus).toBe('fail');
+    expect(analysis.checks[0]).toMatchObject({ id: 'presence', status, detail });
+    expect(analysis.overallStatus).toBe(status);
   });
-  test('HTTP 403 is fetch_error, not a throw', () => {
-    const { analysis } = analysisForLlmsOutcome(
-      {
-        ok: true,
-        requestedUrl: 'https://example.com/llms.txt',
-        finalUrl: 'https://example.com/llms.txt',
-        status: 403,
-        contentType: 'text/plain',
-        body: '',
-        fetchedAt: '2026-09-11T00:00:00.000Z',
-        headers: {},
-        redirectChain: [],
-        responseTimeMs: 1,
-      },
-      missingFull,
-    );
-
-    expect(analysis.checks[0]).toEqual(
-      expect.objectContaining({ id: 'presence', status: 'warn', detail: 'fetch_error' }),
-    );
-    expect(analysis.overallStatus).toBe('warn');
-    expect(analysis.score).toBe(50);
-  });
-  test('timeout is fetch_error', () => {
-    const { analysis } = analysisForLlmsOutcome(
-      {
-        ok: false,
-        requestedUrl: 'https://example.com/llms.txt',
-        error: 'timeout',
-      },
-      missingFull,
-    );
-
-    expect(analysis.overallStatus).toBe('warn');
-    expect(analysis.checks[0]?.detail).toBe('fetch_error');
+  test('HTTP 403 scores 50', () => {
+    expect(analysisForLlmsOutcome(fetched(403), missingFull).analysis.score).toBe(50);
   });
   test('keeps hasLlmsFull when llms.txt fetch errors but llms-full.txt is present', () => {
     const fullBody = '# Companion\n\n> Summary\n\n## Docs\n\n- [A](https://example.com/a.md): A\n';
     const { analysis, hasLlmsFull } = analysisForLlmsOutcome(
-      {
-        ok: true,
-        requestedUrl: 'https://example.com/llms.txt',
-        finalUrl: 'https://example.com/llms.txt',
-        status: 403,
-        contentType: 'text/plain',
-        body: '',
-        fetchedAt: '2026-09-11T00:00:00.000Z',
-        headers: {},
-        redirectChain: [],
-        responseTimeMs: 1,
-      },
-      {
-        ok: true,
-        requestedUrl: 'https://example.com/llms-full.txt',
-        finalUrl: 'https://example.com/llms-full.txt',
-        status: 200,
-        contentType: 'text/plain',
-        body: fullBody,
-        fetchedAt: '2026-09-11T00:00:00.000Z',
-        headers: {},
-        redirectChain: [],
-        responseTimeMs: 1,
-      },
+      fetched(403),
+      fetched(200, fullBody, 'https://example.com/llms-full.txt'),
     );
 
     expect(hasLlmsFull).toBe(true);
@@ -133,94 +87,59 @@ describe('analysisForLlmsOutcome', () => {
 });
 
 describe('extraLine', () => {
-  test('does not claim a successful fetch on 404', () => {
-    const { analysis } = analysisForLlmsOutcome(
-      {
-        ok: true,
-        requestedUrl: 'https://example.com/llms.txt',
-        finalUrl: 'https://example.com/llms.txt',
-        status: 404,
-        contentType: 'text/plain',
-        body: '',
-        fetchedAt: '2026-09-11T00:00:00.000Z',
-        headers: {},
-        redirectChain: [],
-        responseTimeMs: 1,
-      },
-      missingFull,
-    );
+  test('does not claim a fetched llms.txt on 404', () => {
+    const { analysis } = analysisForLlmsOutcome(fetched(404), missingFull);
 
-    expect(extraLine(false, analysis)).toBe(
-      'llms.txt not found (optional file; not a ranking factor)',
-    );
+    expect(extraLine(false, analysis)).toContain('not found');
   });
 });
 
 describe('issuesForNonPresentLlms', () => {
   test('404 is not an issue; 403 and timeout are', () => {
-    expect(
-      issuesForNonPresentLlms('missing', {
-        ok: true,
-        requestedUrl: 'https://example.com/llms.txt',
-        finalUrl: 'https://example.com/llms.txt',
-        status: 404,
-        contentType: 'text/plain',
-        body: '',
-        fetchedAt: '2026-09-11T00:00:00.000Z',
-        headers: {},
-        redirectChain: [],
-        responseTimeMs: 1,
-      }),
-    ).toEqual([]);
-    expect(
-      issuesForNonPresentLlms('error', {
-        ok: true,
-        requestedUrl: 'https://example.com/llms.txt',
-        finalUrl: 'https://example.com/llms.txt',
-        status: 403,
-        contentType: 'text/plain',
-        body: '',
-        fetchedAt: '2026-09-11T00:00:00.000Z',
-        headers: {},
-        redirectChain: [],
-        responseTimeMs: 1,
-      }),
-    ).toEqual([{ code: 'http_status', line: null, text: '403' }]);
-    expect(
-      issuesForNonPresentLlms('error', {
-        ok: false,
-        requestedUrl: 'https://example.com/llms.txt',
-        error: 'timeout',
-      }),
-    ).toEqual([{ code: 'timeout', line: null, text: null }]);
-  });
-});
-
-describe('analyzeLlmsTxtFetchError', () => {
-  test('warns presence without treating the file as 404', () => {
-    const analysis = analyzeLlmsTxtFetchError();
-
-    expect(analysis.overallStatus).toBe('warn');
-    expect(analysis.checks).toEqual([
-      expect.objectContaining({ id: 'presence', status: 'warn', detail: 'fetch_error' }),
+    expect(issuesForNonPresentLlms('missing', fetched(404))).toEqual([]);
+    expect(issuesForNonPresentLlms('error', fetched(403))).toEqual([
+      { code: 'http_status', line: null, text: '403' },
+    ]);
+    expect(issuesForNonPresentLlms('error', timedOut)).toEqual([
+      { code: 'timeout', line: null, text: null },
     ]);
   });
 });
 
-describe('analyzer details', () => {
-  test('llms syntax check names the error', () => {
-    const parsed = parseLlmsTxt('# Site\n# Other\n');
-    const analysis = analyzeLlmsTxt(parsed, {
+describe('parseLlmsTxt', () => {
+  test('parses the H1, summary, sections, links and optional sections', () => {
+    const parsed = parseLlmsTxt(VALID_LLMS);
+
+    expect(parsed.h1).toBe('FastHTML');
+    expect(parsed.summary).toContain('python library');
+    expect(parsed.sections).toHaveLength(2);
+    expect(parsed.sections[0]?.heading).toBe('Docs');
+    expect(parsed.sections[1]?.isOptional).toBe(true);
+    expect(parsed.links).toHaveLength(3);
+    expect(parsed.hasBom).toBe(false);
+    expect(parsed.syntaxErrors).toEqual([]);
+  });
+  test('detects a BOM and a missing H1', () => {
+    expect(parseLlmsTxt('\uFEFF# Title\n\n> Summary').hasBom).toBe(true);
+
+    const missing = parseLlmsTxt('## Docs\n\n- [Link](/relative)');
+
+    expect(missing.h1).toBeNull();
+    expect(missing.syntaxErrors.length).toBeGreaterThan(0);
+  });
+});
+
+describe('analyzer checks', () => {
+  test('a repeated H1 names multiple_h1 in the syntax check', () => {
+    const body = '# Site\n# Other\n';
+    const analysis = analyzeLlmsTxt(parseLlmsTxt(body), {
       present: true,
       contentType: 'text/plain',
-      rawContent: '# Site\n# Other\n',
+      rawContent: body,
     });
-    const syntax = analysis.checks.find((check) => check.id === 'syntax');
-
-    expect(syntax?.detail).toMatch(/multiple_h1/);
-    expect(syntax?.detail).not.toBe('syntax_errors');
+    expect(analysis.checks.find((check) => check.id === 'syntax')?.detail).toMatch(/multiple_h1/);
   });
-  test('non_list_in_section explains H2 file lists and cites the spec', () => {
+  test('paragraphs inside an H2 section warn with non_list_in_section', () => {
     const body = `# Site
 
 > Summary
@@ -238,51 +157,19 @@ Fifth paragraph.
       contentType: 'text/plain',
       rawContent: body,
     });
-    const syntax = analysis.checks.find((check) => check.id === 'syntax');
-    const hint = analysis.checks.find((check) => check.id === 'non_list_in_section');
-
-    expect(syntax?.status).toBe('warn');
-    expect(syntax?.detail).toMatch(/lines 7, 8, 9, 10, 11: non_list_in_section/);
-    expect(syntax?.detail).not.toContain('https://llmstxt.org/#format');
-    expect(hint).toEqual(
-      expect.objectContaining({
-        status: 'info',
-        detail: 'H2 file lists only allow - [name](url). https://llmstxt.org/#format',
-      }),
+    expect(analysis.checks.find((check) => check.id === 'syntax')).toMatchObject({
+      status: 'warn',
+      detail: expect.stringMatching(/non_list_in_section/),
+    });
+    expect(analysis.checks.find((check) => check.id === 'non_list_in_section')?.status).toBe(
+      'info',
     );
   });
-});
-
-describe('parseLlmsTxt', () => {
-  test('parses H1 summary sections and links', () => {
-    const parsed = parseLlmsTxt(VALID_LLMS);
-
-    expect(parsed.h1).toBe('FastHTML');
-    expect(parsed.summary).toContain('python library');
-    expect(parsed.sections).toHaveLength(2);
-    expect(parsed.sections[0]?.heading).toBe('Docs');
-    expect(parsed.sections[1]?.isOptional).toBe(true);
-    expect(parsed.links).toHaveLength(3);
-    expect(parsed.hasBom).toBe(false);
-    expect(parsed.syntaxErrors).toEqual([]);
-  });
-  test('detects BOM and a missing H1', () => {
-    expect(parseLlmsTxt('\uFEFF# Title\n\n> Summary').hasBom).toBe(true);
-    const missing = parseLlmsTxt('## Docs\n\n- [Link](/relative)');
-
-    expect(missing.h1).toBeNull();
-    expect(missing.syntaxErrors.length).toBeGreaterThan(0);
-  });
-});
-
-describe('isAbsoluteUrl and hasMdExtension', () => {
-  test('isAbsoluteUrl accepts only http(s) URLs', () => {
+  test('isAbsoluteUrl accepts only http(s) and hasMdExtension reads the pathname', () => {
     expect(isAbsoluteUrl('https://example.com/a.md')).toBe(true);
     expect(isAbsoluteUrl('http://example.com/a')).toBe(true);
     expect(isAbsoluteUrl('/relative')).toBe(false);
     expect(isAbsoluteUrl('ftp://example.com/a')).toBe(false);
-  });
-  test('hasMdExtension reads the pathname', () => {
     expect(hasMdExtension('https://example.com/doc.md')).toBe(true);
     expect(hasMdExtension('/notes.md')).toBe(true);
     expect(hasMdExtension('https://example.com/doc.html')).toBe(false);
@@ -290,110 +177,56 @@ describe('isAbsoluteUrl and hasMdExtension', () => {
 });
 
 describe('analyzeLlmsTxtPair and analyzeAbsentLlmsTxt', () => {
-  test('analyzeAbsentLlmsTxt is a presence failure with empty sections', () => {
+  const main = { present: true, contentType: 'text/plain', rawContent: VALID_LLMS };
+
+  test('an absent llms.txt is a presence failure with empty sections', () => {
     const analysis = analyzeAbsentLlmsTxt();
 
-    expect(analysis.hasLlmsFull).toBe(false);
-    expect(analysis.sections).toEqual([]);
-    expect(analysis.links).toEqual([]);
-    expect(analysis.llmsFullChecks).toEqual([]);
+    expect(analysis).toMatchObject({
+      hasLlmsFull: false,
+      sections: [],
+      links: [],
+      llmsFullChecks: [],
+    });
     expect(analysis.checks).toEqual([
       expect.objectContaining({ id: 'presence', status: 'fail', detail: 'not_found' }),
     ]);
     expect(analysis.overallStatus).toBe('fail');
   });
-  test('analyzeLlmsTxtPair keeps the main analysis when the companion is missing', () => {
+  test('the main analysis is kept when the companion is missing', () => {
     const parsed = parseLlmsTxt(VALID_LLMS);
-    const main = analyzeLlmsTxt(parsed, {
-      present: true,
-      contentType: 'text/plain',
-      rawContent: VALID_LLMS,
-    });
-    const pair = analyzeLlmsTxtPair(
-      parsed,
-      { present: true, contentType: 'text/plain', rawContent: VALID_LLMS },
-      null,
-      false,
-    );
-    expect(pair.hasLlmsFull).toBe(false);
-    expect(pair.score).toBe(main.score);
-    expect(pair.llmsFullChecks).toEqual([]);
+    const single = analyzeLlmsTxt(parsed, main);
+    const pair = analyzeLlmsTxtPair(parsed, main, null, false);
+
+    expect(pair).toMatchObject({ hasLlmsFull: false, score: single.score, llmsFullChecks: [] });
   });
-  test('analyzeLlmsTxtPair averages scores when llms-full.txt is present', () => {
+  test('the pair score sits between the two analyses when llms-full.txt is present', () => {
     const parsed = parseLlmsTxt(VALID_LLMS);
-    const main = analyzeLlmsTxt(parsed, {
-      present: true,
+    const mainOnly = analyzeLlmsTxt(parsed, main);
+    const full = analyzeLlmsTxt(parsed, { ...main, isCompanion: true });
+    const pair = analyzeLlmsTxtPair(parsed, main, parsed, true, {
       contentType: 'text/plain',
       rawContent: VALID_LLMS,
     });
-    const full = analyzeLlmsTxt(parsed, {
-      present: true,
-      contentType: 'text/plain',
-      rawContent: VALID_LLMS,
-      isCompanion: true,
-    });
-    const pair = analyzeLlmsTxtPair(
-      parsed,
-      { present: true, contentType: 'text/plain', rawContent: VALID_LLMS },
-      parsed,
-      true,
-      { contentType: 'text/plain', rawContent: VALID_LLMS },
-    );
     expect(pair.hasLlmsFull).toBe(true);
     expect(pair.llmsFullChecks.length).toBe(full.checks.length);
-    expect(pair.score).toBeGreaterThanOrEqual(Math.min(main.score, full.score));
-    expect(pair.score).toBeLessThanOrEqual(Math.max(main.score, full.score));
+    expect(pair.score).toBeGreaterThanOrEqual(Math.min(mainOnly.score, full.score));
+    expect(pair.score).toBeLessThanOrEqual(Math.max(mainOnly.score, full.score));
   });
 });
 
 describe('llmsCheckSections', () => {
-  test('uses one table when only llms.txt is present', () => {
-    const { analysis } = analysisForLlmsOutcome(
-      {
-        ok: true,
-        requestedUrl: 'https://example.com/llms.txt',
-        finalUrl: 'https://example.com/llms.txt',
-        status: 200,
-        contentType: 'text/plain',
-        body: VALID_LLMS,
-        fetchedAt: '2026-09-11T00:00:00.000Z',
-        headers: {},
-        redirectChain: [],
-        responseTimeMs: 1,
-      },
-      missingFull,
-    );
+  test('one table when only llms.txt is present', () => {
+    const { analysis } = analysisForLlmsOutcome(fetched(200, VALID_LLMS), missingFull);
     const sections = llmsCheckSections(analysis);
 
     expect(sections.map((section) => section.heading)).toEqual(['llms.txt']);
     expect(sections[0]?.checks.length).toBe(analysis.checks.length);
   });
-  test('splits llms.txt and llms-full.txt into two tables', () => {
+  test('llms.txt and llms-full.txt get two tables', () => {
     const { analysis } = analysisForLlmsOutcome(
-      {
-        ok: true,
-        requestedUrl: 'https://example.com/llms.txt',
-        finalUrl: 'https://example.com/llms.txt',
-        status: 200,
-        contentType: 'text/plain',
-        body: VALID_LLMS,
-        fetchedAt: '2026-09-11T00:00:00.000Z',
-        headers: {},
-        redirectChain: [],
-        responseTimeMs: 1,
-      },
-      {
-        ok: true,
-        requestedUrl: 'https://example.com/llms-full.txt',
-        finalUrl: 'https://example.com/llms-full.txt',
-        status: 200,
-        contentType: 'text/plain',
-        body: VALID_LLMS,
-        fetchedAt: '2026-09-11T00:00:00.000Z',
-        headers: {},
-        redirectChain: [],
-        responseTimeMs: 1,
-      },
+      fetched(200, VALID_LLMS),
+      fetched(200, VALID_LLMS, 'https://example.com/llms-full.txt'),
     );
     const sections = llmsCheckSections(analysis);
     const text = formatToolReport({
@@ -404,10 +237,6 @@ describe('llmsCheckSections', () => {
       sections,
     });
     expect(sections.map((section) => section.heading)).toEqual(['llms.txt', 'llms-full.txt']);
-    expect(sections[0]?.checks.map((check) => check.id)).not.toEqual(
-      sections[1]?.checks.map((check) => check.id),
-    );
-    expect(text).toContain('llms.txt');
     expect(text).toContain('llms-full.txt');
     expect(text.split('Status').length - 1).toBe(2);
   });

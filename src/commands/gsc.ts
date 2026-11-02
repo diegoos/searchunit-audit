@@ -1,7 +1,8 @@
 import type { CliFlags } from '../lib/args.ts';
 import { CliError } from '../lib/errors.ts';
 import { redact, runGscQuery, type GscSlice } from '../gsc.ts';
-import { renderAgentMarkdown, printJson } from '../lib/output.ts';
+import { isRecord } from '../lib/guards.ts';
+import { renderAgentMarkdown, printJson, stripControls } from '../lib/output.ts';
 import { persistFileOutput } from '../lib/outputFile.ts';
 import { formatTable } from '../lib/table.ts';
 import { theme } from '../lib/theme.ts';
@@ -47,16 +48,16 @@ export async function runGsc(target: string | undefined, flags: CliFlags): Promi
   return 0;
 }
 
-function parseGscArgs(
-  target: string | undefined,
-  rest: string[],
-): {
+/** A parsed `gsc` invocation. `action` names the payload. */
+interface GscRequest {
   action: string;
   mode: 'check' | 'performance' | 'inspect';
   slice?: GscSlice;
   url?: string;
   sample?: string[];
-} {
+}
+
+function parseGscArgs(target: string | undefined, rest: string[]): GscRequest {
   if (target === 'check') {
     if (rest.length > 0) {
       throw new CliError('Too many arguments. Example: searchunit gsc check', 2);
@@ -193,12 +194,7 @@ function emitGsc(flags: CliFlags, payload: Record<string, unknown>): void {
 
 /** Human table for a Search Console payload. */
 export function renderGscTables(payload: Record<string, unknown>): string {
-  const blocks = [
-    '',
-    theme.title(TITLE),
-    '',
-    formatTable(['Field', 'Value'], summaryRows(payload)),
-  ];
+  const blocks = ['', theme.title(TITLE), '', textTable(['Field', 'Value'], summaryRows(payload))];
   const inspections = Array.isArray(payload.inspections)
     ? payload.inspections.filter(isRecord)
     : [];
@@ -243,7 +239,15 @@ function pushTable(blocks: string[], title: string, headers: string[], rows: str
     return;
   }
 
-  blocks.push('', theme.heading(title), '', formatTable(headers, rows));
+  blocks.push('', theme.heading(title), '', textTable(headers, rows));
+}
+
+/** Search Console rows hold query and page text, so controls are dropped before the TTY. */
+function textTable(headers: string[], rows: string[][]): string {
+  return formatTable(
+    headers,
+    rows.map((row) => row.map(stripControls)),
+  );
 }
 
 /** Metric rows under one heading. An empty slice stays off the page. */
@@ -447,8 +451,4 @@ function text(value: unknown): string {
   }
 
   return String(value);
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === 'object' && value !== null && !Array.isArray(value);
 }

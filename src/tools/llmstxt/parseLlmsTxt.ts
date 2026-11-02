@@ -40,7 +40,6 @@ const H1_RE = /^#\s+(.+)$/;
 const H2_RE = /^##\s+(.+)$/;
 
 /** Removes a UTF-8 BOM prefix when present. */
-
 function stripBom(content: string): { text: string; hasBom: boolean } {
   if (content.charCodeAt(0) === 0xfeff) {
     return { text: content.slice(1), hasBom: true };
@@ -50,7 +49,6 @@ function stripBom(content: string): { text: string; hasBom: boolean } {
 }
 
 /** Parses a single `- [title](url)` list link line; returns null when malformed. */
-
 function parseListLink(line: string): LlmsTxtLink | null {
   const m = line.match(LIST_LINK_RE);
 
@@ -263,8 +261,7 @@ export function isAbsoluteUrl(url: string): boolean {
 /** Returns true when a link pathname ends with .md (llmstxt.org convention). */
 export function hasMdExtension(url: string): boolean {
   try {
-    const pathname = new URL(url, 'https://example.com').pathname;
-    return pathname.endsWith('.md');
+    return new URL(url, 'https://example.com').pathname.endsWith('.md');
   } catch {
     return url.endsWith('.md');
   }

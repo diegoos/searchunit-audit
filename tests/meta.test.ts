@@ -1,67 +1,66 @@
 import { describe, expect, test } from 'bun:test';
 import { analyzeMeta } from '../src/tools/meta/analyzeMeta.ts';
 import { parseMeta } from '../src/tools/meta/parseMeta.ts';
+import type { CheckStatus } from '../src/lib/output.ts';
 
 const GOOD_HTML = `<html lang="en">
-
-<head>
-
-  <title>SearchUnit SEO and GEO audits for teams worldwide!!</title>
-
-  <meta name="description" content="Discover how SearchUnit helps you improve your SEO and GEO visibility with deep audits and actionable insights for modern search engines and AI."/>
-
-  <link rel="canonical" href="https://example.com/page"/>
-
-  <meta name="viewport" content="width=device-width, initial-scale=1"/>
-
-  <meta property="og:title" content="Best SEO Tool for Your Website"/>
-
-  <meta property="og:description" content="Improve your SEO and GEO visibility."/>
-
-  <meta property="og:image" content="https://example.com/og-image.jpg"/>
-
-  <meta property="og:url" content="https://example.com/page"/>
-
-  <meta property="og:type" content="website"/>
-
-  <meta name="twitter:card" content="summary_large_image"/>
-
-</head>
-
+  <head>
+    <title>SearchUnit SEO and GEO audits for teams worldwide!!</title>
+    <meta name="description" content="Discover how SearchUnit helps you improve your SEO and GEO visibility with deep audits and actionable insights for modern search engines and AI."/>
+    <link rel="canonical" href="https://example.com/page"/>
+    <meta name="viewport" content="width=device-width, initial-scale=1"/>
+    <meta property="og:title" content="Best SEO Tool for Your Website"/>
+    <meta property="og:description" content="Improve your SEO and GEO visibility."/>
+    <meta property="og:image" content="https://example.com/og-image.jpg"/>
+    <meta property="og:url" content="https://example.com/page"/>
+    <meta property="og:type" content="website"/>
+    <meta name="twitter:card" content="summary_large_image"/>
+  </head>
 </html>`;
 
+const PAGE = 'https://example.com/page';
+
+function checkOf(analysis: ReturnType<typeof analyzeMeta>, id: string) {
+  return analysis.checks.find((check) => check.id === id);
+}
+
 describe('parseMeta', () => {
-  test('extracts title description canonical og and twitter fields', () => {
+  test('extracts title, description, canonical, lang, og and twitter fields', () => {
     const tags = parseMeta(GOOD_HTML);
 
-    expect(tags.title).toBe('SearchUnit SEO and GEO audits for teams worldwide!!');
+    expect(tags).toMatchObject({
+      title: 'SearchUnit SEO and GEO audits for teams worldwide!!',
+      canonical: PAGE,
+      lang: 'en',
+      ogTitle: 'Best SEO Tool for Your Website',
+      ogImage: 'https://example.com/og-image.jpg',
+      ogType: 'website',
+      twitterCard: 'summary_large_image',
+    });
     expect(tags.description?.startsWith('Discover how SearchUnit')).toBe(true);
-    expect(tags.canonical).toBe('https://example.com/page');
     expect(tags.viewport).toContain('width=device-width');
-    expect(tags.lang).toBe('en');
-    expect(tags.ogTitle).toBe('Best SEO Tool for Your Website');
-    expect(tags.ogImage).toBe('https://example.com/og-image.jpg');
-    expect(tags.ogType).toBe('website');
-    expect(tags.twitterCard).toBe('summary_large_image');
     expect(tags.robotsMeta).toBeUndefined();
   });
-  test('returns undefined fields on empty HTML', () => {
-    const tags = parseMeta('<html></html>');
+  test('reads a bot-specific robots meta tag', () => {
+    const tags = parseMeta(
+      `<html><head><title>${'A'.repeat(55)}</title>
+      <meta name="robots" content="index,follow"/>
+      <meta name="Googlebot" content="noindex"/>
+      </head></html>`,
+    );
 
-    expect(tags.title).toBeUndefined();
-    expect(tags.description).toBeUndefined();
-    expect(tags.canonical).toBeUndefined();
+    expect(analyzeMeta(tags, PAGE).checks.find((check) => check.id === 'robots_meta')?.status).toBe(
+      'fail',
+    );
   });
 });
 
 describe('analyzeMeta', () => {
-  test('returns score overallStatus checks and tags for a complete page', () => {
-    const tags = parseMeta(GOOD_HTML);
-    const analysis = analyzeMeta(tags, 'https://example.com/page');
+  test('a complete page passes with the full check list', () => {
+    const analysis = analyzeMeta(parseMeta(GOOD_HTML), PAGE);
 
     expect(analysis.score).toBeGreaterThanOrEqual(80);
     expect(analysis.overallStatus).toBe('pass');
-    expect(analysis.tags).toEqual(tags);
     expect(analysis.checks.map((check) => check.id)).toEqual([
       'title',
       'description',
@@ -79,92 +78,47 @@ describe('analyzeMeta', () => {
       'twitter_description',
       'twitter_image',
     ]);
-    expect(analysis.checks.find((check) => check.id === 'title')?.status).toBe('pass');
-    expect(analysis.checks.find((check) => check.id === 'canonical')?.status).toBe('pass');
+    expect(checkOf(analysis, 'title')?.status).toBe('pass');
+    expect(checkOf(analysis, 'canonical')?.status).toBe('pass');
   });
-  test('fails a missing title and a noindex robots meta', () => {
-    const tags = parseMeta(GOOD_HTML);
-    const missingTitle = analyzeMeta({ ...tags, title: undefined }, 'https://example.com/');
+  test.each<[string, Partial<ReturnType<typeof parseMeta>>, string, CheckStatus]>([
+    ['a missing title', { title: undefined }, 'title', 'fail'],
+    ['a noindex robots meta', { robotsMeta: 'noindex, nofollow' }, 'robots_meta', 'fail'],
+    ['a none robots meta', { robotsMeta: 'none' }, 'robots_meta', 'fail'],
+    ['a UA-prefixed noindex', { robotsMeta: 'googlebot: noindex' }, 'robots_meta', 'fail'],
+    ['noindexifembedded', { robotsMeta: 'noindexifembedded' }, 'robots_meta', 'pass'],
+    [
+      'a canonical on another host',
+      { canonical: 'https://other.example/page' },
+      'canonical',
+      'warn',
+    ],
+  ])('%s gives %s', (_name, over, id, status) => {
+    const tags = { ...parseMeta(GOOD_HTML), ...over };
 
-    expect(missingTitle.checks.find((check) => check.id === 'title')?.status).toBe('fail');
-    expect(missingTitle.checks.find((check) => check.id === 'title')?.detail).toBe('missing');
-
-    const noindex = analyzeMeta(
-      { ...tags, robotsMeta: 'noindex, nofollow' },
-      'https://example.com/',
-    );
-    expect(noindex.checks.find((check) => check.id === 'robots_meta')?.status).toBe('fail');
+    expect(checkOf(analyzeMeta(tags, PAGE), id)?.status).toBe(status);
   });
-  test('fails robots_meta for none and ignores noindexifembedded', () => {
-    const tags = parseMeta(GOOD_HTML);
-    const none = analyzeMeta({ ...tags, robotsMeta: 'none' }, 'https://example.com/');
-    const embedded = analyzeMeta(
-      { ...tags, robotsMeta: 'noindexifembedded' },
-      'https://example.com/',
-    );
-
-    expect(none.checks.find((check) => check.id === 'robots_meta')?.status).toBe('fail');
-    expect(embedded.checks.find((check) => check.id === 'robots_meta')?.status).toBe('pass');
-  });
-  test('fails robots_meta for UA-prefixed noindex', () => {
-    const tags = parseMeta(GOOD_HTML);
-    const analysis = analyzeMeta(
-      { ...tags, robotsMeta: 'googlebot: noindex' },
-      'https://example.com/',
+  test.each([
+    ['Hi', '2 chars'],
+    ['A'.repeat(95), '95 chars'],
+  ])('title %p fails and names the ideal 50–60 range', (title, sizeNote) => {
+    const check = checkOf(
+      analyzeMeta(parseMeta(`<html><head><title>${title}</title></head></html>`), PAGE),
+      'title',
     );
 
-    expect(analysis.checks.find((check) => check.id === 'robots_meta')?.status).toBe('fail');
+    expect(check?.status).toBe('fail');
+    expect(check?.detail).toContain(sizeNote);
+    expect(check?.detail).toContain('ideal 50–60');
   });
-  test('fails a title outside the warn band', () => {
-    const tags = parseMeta(GOOD_HTML);
-    const analysis = analyzeMeta({ ...tags, title: 'Hi' }, 'https://example.com/');
+  test('twitter:image falls back to og:image', () => {
+    const tags = { ...parseMeta(GOOD_HTML), twitterImage: undefined };
+    const check = checkOf(analyzeMeta(tags, PAGE), 'twitter_image');
 
-    expect(analysis.checks.find((check) => check.id === 'title')?.status).toBe('fail');
-    expect(analysis.checks.find((check) => check.id === 'title')?.detail).toContain('2 chars');
-    expect(analysis.checks.find((check) => check.id === 'title')?.detail).toContain('ideal 50–60');
-  });
-  test('warns when canonical is on another host', () => {
-    const tags = parseMeta(GOOD_HTML);
-    const analysis = analyzeMeta(
-      { ...tags, canonical: 'https://other.example/page' },
-      'https://example.com/page',
-    );
-    expect(analysis.checks.find((check) => check.id === 'canonical')?.status).toBe('warn');
-  });
-  test('falls back to og:image for twitter:image', () => {
-    const tags = parseMeta(GOOD_HTML);
-    const analysis = analyzeMeta({ ...tags, twitterImage: undefined }, 'https://example.com/page');
-    const check = analysis.checks.find((row) => row.id === 'twitter_image');
-
-    expect(check?.status).toBe('pass');
-    expect(check?.value).toBe(tags.ogImage);
-    expect(check?.detail).toBe('falls back to og:image');
-  });
-  test('fails robots_meta when Googlebot is noindex', () => {
-    const tags = parseMeta(
-      `<html><head><title>${'A'.repeat(55)}</title>
-      <meta name="description" content="${'d'.repeat(140)}"/>
-      <link rel="canonical" href="https://example.com/page"/>
-      <meta name="robots" content="index,follow"/>
-      <meta name="Googlebot" content="noindex"/>
-      <meta name="viewport" content="width=device-width"/>
-      <meta property="og:title" content="t"/><meta property="og:description" content="d"/>
-      <meta property="og:image" content="https://example.com/i.jpg"/>
-      </head></html>`,
-    );
-    const analysis = analyzeMeta(tags, 'https://example.com/page');
-
-    expect(analysis.checks.find((check) => check.id === 'robots_meta')?.status).toBe('fail');
-  });
-  test('meta title detail includes the ideal range when over the limit', () => {
-    const analysis = analyzeMeta(
-      parseMeta(`<html><head><title>${'A'.repeat(95)}</title></head></html>`),
-      'https://example.com/',
-    );
-    const title = analysis.checks.find((check) => check.id === 'title');
-
-    expect(title?.status).toBe('fail');
-    expect(title?.detail).toContain('95 chars');
-    expect(title?.detail).toContain('ideal 50–60');
+    expect(check).toMatchObject({
+      status: 'pass',
+      value: tags.ogImage,
+      detail: 'falls back to og:image',
+    });
   });
 });

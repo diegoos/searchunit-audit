@@ -111,29 +111,24 @@ function llmsCheck(
   return { id: name, label: name, status, detail, ...extra };
 }
 
-/** Builds the full checklist for llms.txt or llms-full.txt (prefixed when companion). */
-
-// eslint-disable-next-line complexity -- one check per field of the same catalog
-function buildChecks(parsed: ParsedLlmsTxt, options: AnalyzeLlmsTxtOptions): LlmsTxtCheck[] {
-  const checks: LlmsTxtCheck[] = [];
-  const { present, contentType, isCompanion = false } = options;
-  const prefix = isCompanion ? 'full_' : '';
-
-  checks.push(
-    llmsCheck(prefix, 'presence', present ? 'pass' : 'fail', present ? 'found' : 'not_found'),
-  );
-
-  if (!present) {
-    return checks;
-  }
-
+/** Structure checks: content type, H1, summary, file lists, link format, optional section, .md convention. */
+function structureChecks(
+  prefix: string,
+  parsed: ParsedLlmsTxt,
+  contentType: string | undefined,
+): LlmsTxtCheck[] {
   const isText =
     !contentType ||
     contentType.includes('text/') ||
     contentType.includes('markdown') ||
     contentType.includes('application/octet-stream');
+  const sectionCount = parsed.sections.filter((s) => s.links.length > 0).length;
+  const hasFileLists = sectionCount > 0;
+  const badLinks = parsed.links.filter((l) => !isAbsoluteUrl(l.url));
+  const hasOptional = parsed.sections.some((s) => s.isOptional);
+  const md = mdConvention(parsed.sections);
 
-  checks.push(
+  return [
     llmsCheck(prefix, 'content_type', isText ? 'pass' : 'warn', contentType ?? 'unknown'),
     llmsCheck(prefix, 'h1_title', parsed.h1 ? 'pass' : 'fail', parsed.h1 ?? 'missing'),
     llmsCheck(
@@ -142,21 +137,12 @@ function buildChecks(parsed: ParsedLlmsTxt, options: AnalyzeLlmsTxtOptions): Llm
       parsed.summary ? 'pass' : 'warn',
       parsed.summary ? 'present' : 'missing',
     ),
-  );
-  const sectionCount = parsed.sections.filter((s) => s.links.length > 0).length;
-  const hasFileLists = sectionCount > 0;
-
-  checks.push(
     llmsCheck(
       prefix,
       'file_lists',
       hasFileLists ? 'pass' : 'warn',
       hasFileLists ? `${sectionCount} section(s)` : 'none',
     ),
-  );
-  const badLinks = parsed.links.filter((l) => !isAbsoluteUrl(l.url));
-
-  checks.push(
     llmsCheck(
       prefix,
       'links_format',
@@ -167,69 +153,92 @@ function buildChecks(parsed: ParsedLlmsTxt, options: AnalyzeLlmsTxtOptions): Llm
         value: badLinks.length > 0 ? String(badLinks.length) : undefined,
       },
     ),
-  );
-  const hasOptional = parsed.sections.some((s) => s.isOptional);
-
-  checks.push(
     llmsCheck(
       prefix,
       'optional_section',
       hasOptional ? 'pass' : 'warn',
       hasOptional ? 'present' : 'absent',
     ),
-  );
-  const md = mdConvention(parsed.sections);
+    llmsCheck(prefix, 'md_convention', md.status, md.detail),
+  ];
+}
 
-  checks.push(llmsCheck(prefix, 'md_convention', md.status, md.detail));
-  const rawContent = options.rawContent ?? '';
+function sizeCheck(prefix: string, parsed: ParsedLlmsTxt, rawContent: string): LlmsTxtCheck {
   const byteSize = new TextEncoder().encode(rawContent).length;
   const empty =
     rawContent.trim().length === 0 || (!parsed.h1 && parsed.links.length === 0 && !parsed.summary);
   const tooLarge = byteSize > MAX_SIZE_BYTES;
 
-  checks.push(
-    llmsCheck(
-      prefix,
-      'size',
-      empty || tooLarge ? 'warn' : 'pass',
-      sizeDetail(empty, tooLarge, MAX_SIZE_BYTES / 1024),
-      {
-        value: String(byteSize),
-      },
-    ),
+  return llmsCheck(
+    prefix,
+    'size',
+    empty || tooLarge ? 'warn' : 'pass',
+    sizeDetail(empty, tooLarge, MAX_SIZE_BYTES / 1024),
+    {
+      value: String(byteSize),
+    },
   );
+}
 
-  if (parsed.syntaxErrors.length > 0) {
-    const shown = parsed.syntaxErrors.slice(0, 8);
-
-    checks.push(
-      llmsCheck(prefix, 'syntax', 'warn', formatSyntaxDetail(shown), {
-        syntaxErrors: shown,
-        value: String(parsed.syntaxErrors.length),
-      }),
-    );
-
-    if (shown.some((err) => err.code === 'non_list_in_section')) {
-      checks.push(
-        llmsCheck(
-          prefix,
-          'non_list_in_section',
-          'info',
-          `H2 file lists only allow - [name](url). ${LLMS_TXT_FORMAT_URL}`,
-        ),
-      );
-    }
+/** Syntax warnings for the first 8 errors, plus an info row when H2 lists hold non-list lines. */
+function syntaxChecks(prefix: string, errors: readonly LlmsSyntaxError[]): LlmsTxtCheck[] {
+  if (errors.length === 0) {
+    return [];
   }
 
-  if (!isLikelyUtf8([parsed.h1 ?? '', parsed.summary ?? '', ...parsed.details].join('\n'))) {
-    checks.push(llmsCheck(prefix, 'encoding', 'warn', 'non_utf8'));
+  const shown = errors.slice(0, 8);
+  const checks = [
+    llmsCheck(prefix, 'syntax', 'warn', formatSyntaxDetail(shown), {
+      syntaxErrors: shown,
+      value: String(errors.length),
+    }),
+  ];
+
+  if (shown.some((err) => err.code === 'non_list_in_section')) {
+    checks.push(
+      llmsCheck(
+        prefix,
+        'non_list_in_section',
+        'info',
+        `H2 file lists only allow - [name](url). ${LLMS_TXT_FORMAT_URL}`,
+      ),
+    );
   }
 
   return checks;
 }
 
-/** Derives overall pass/warn/fail from presence, H1, and weighted score. */
+function encodingChecks(prefix: string, parsed: ParsedLlmsTxt): LlmsTxtCheck[] {
+  const text = [parsed.h1 ?? '', parsed.summary ?? '', ...parsed.details].join('\n');
 
+  return isLikelyUtf8(text) ? [] : [llmsCheck(prefix, 'encoding', 'warn', 'non_utf8')];
+}
+
+/** Builds the full checklist for llms.txt or llms-full.txt (prefixed when companion). */
+function buildChecks(parsed: ParsedLlmsTxt, options: AnalyzeLlmsTxtOptions): LlmsTxtCheck[] {
+  const { present, contentType, isCompanion = false } = options;
+  const prefix = isCompanion ? 'full_' : '';
+  const presence = llmsCheck(
+    prefix,
+    'presence',
+    present ? 'pass' : 'fail',
+    present ? 'found' : 'not_found',
+  );
+
+  if (!present) {
+    return [presence];
+  }
+
+  return [
+    presence,
+    ...structureChecks(prefix, parsed, contentType),
+    sizeCheck(prefix, parsed, options.rawContent ?? ''),
+    ...syntaxChecks(prefix, parsed.syntaxErrors),
+    ...encodingChecks(prefix, parsed),
+  ];
+}
+
+/** Derives overall pass/warn/fail from presence, H1, and weighted score. */
 function computeOverallStatus(checks: LlmsTxtCheck[], score: number): CheckStatus {
   const presence = checks.find((c) => c.id === 'presence' || c.id === 'full_presence');
   const h1 = checks.find((c) => c.id === 'h1_title' || c.id === 'full_h1_title');
@@ -262,7 +271,6 @@ export function analyzeLlmsTxt(
 }
 
 /** Merges main and companion analyses when llms-full.txt is present. */
-
 function mergeCompanionAnalysis(
   main: LlmsTxtAnalysis,
   fullAnalysis: LlmsTxtAnalysis,
