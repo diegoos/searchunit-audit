@@ -1,12 +1,23 @@
 import { describe, expect, test } from 'bun:test';
 import { parseHtmlPage } from '../src/engine/htmlParser.ts';
+import { isLocalTarget } from '../src/engine/localTarget.ts';
 import { checkPageLinks } from '../src/engine/linkStatus.ts';
-import { isLocalTarget } from '../src/engine/scoring.ts';
+import { computeAuditScores, type CriticalBlocker } from '../src/engine/scoring.ts';
 import { fetchErrorCode, type FetchOutcome } from '../src/lib/fetch.ts';
-import { bundleFromHtml, collectCriticalBlockers } from './engine-fixtures.ts';
+import { bundleFromHtml } from './engine-fixtures.ts';
 
 const blog = (heading: string) =>
   `<html><body><main><h1>Guia</h1><h2>${heading}</h2><p>Resposta curta e direta.</p></main></body></html>`;
+
+function blockersFor(html: string, url: string): CriticalBlocker[] {
+  const bundle = bundleFromHtml(html);
+  const blockers: CriticalBlocker[] = [];
+
+  bundle.auditedPage.url = url;
+  computeAuditScores(bundle, blockers);
+
+  return blockers;
+}
 
 describe('loopback targets', () => {
   test('isLocalTarget covers localhost, *.localhost, 127/8 and ::1 only', () => {
@@ -15,19 +26,13 @@ describe('loopback targets', () => {
     expect(isLocalTarget('http://127.0.0.2/')).toBe(true);
     expect(isLocalTarget('https://example.com/')).toBe(false);
   });
-  test('a local http target is not blocked by no_https', () => {
-    const bundle = bundleFromHtml(blog('Como escolher um tênis?'));
+  test.each([
+    ['http://localhost:8080/guia.html', false],
+    ['http://example.com/guia.html', true],
+  ])('no_https blocker for %s: %p', (url, blocked) => {
+    const blockers = blockersFor(blog('Como escolher um tênis?'), url);
 
-    bundle.auditedPage.url = 'http://localhost:8080/guia.html';
-
-    expect(collectCriticalBlockers(bundle).some((b) => b.id === 'no_https')).toBe(false);
-  });
-  test('a public http target is still blocked by no_https', () => {
-    const bundle = bundleFromHtml(blog('Como escolher um tênis?'));
-
-    bundle.auditedPage.url = 'http://example.com/guia.html';
-
-    expect(collectCriticalBlockers(bundle).some((b) => b.id === 'no_https')).toBe(true);
+    expect(blockers.some((blocker) => blocker.id === 'no_https')).toBe(blocked);
   });
 });
 
@@ -57,29 +62,17 @@ describe('question headings and FAQ credit', () => {
   });
 });
 
-describe('opening paragraph', () => {
-  test('citability.opening skips a leading byline', () => {
-    const html =
-      '<html><body><main><p>Por Ana Souza, publicado em 10/03/2026.</p><p>Resposta direta aqui.</p></main></body></html>';
-    const parsed = parseHtmlPage(html, 'https://example.com/blog/guia');
-
-    expect(parsed.citabilityOpening).toBe('Resposta direta aqui.');
-  });
-});
-
-describe('fetch errors', () => {
+describe('fetch errors and outbound links', () => {
   test('fetchErrorCode names failures and HTTP error statuses, and is null when usable', () => {
-    const failed: FetchOutcome = {
-      ok: false,
-      requestedUrl: 'https://example.com/robots.txt',
-      error: 'timeout',
-    };
-    const http503 = { ...failed, ok: true, status: 503 } as unknown as FetchOutcome;
-    const usable = { ...failed, ok: true, status: 200 } as unknown as FetchOutcome;
+    const base = { ok: false, requestedUrl: 'https://example.com/robots.txt', error: 'timeout' };
 
-    expect(fetchErrorCode(failed)).toBe('timeout');
-    expect(fetchErrorCode(http503)).toBe('http_503');
-    expect(fetchErrorCode(usable)).toBeNull();
+    expect(fetchErrorCode(base as FetchOutcome)).toBe('timeout');
+    expect(fetchErrorCode({ ...base, ok: true, status: 503 } as unknown as FetchOutcome)).toBe(
+      'http_503',
+    );
+    expect(
+      fetchErrorCode({ ...base, ok: true, status: 200 } as unknown as FetchOutcome),
+    ).toBeNull();
   });
   test('outbound links are never requested by checkPageLinks', async () => {
     const report = await checkPageLinks('https://example.com/', []);

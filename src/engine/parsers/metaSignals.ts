@@ -132,6 +132,30 @@ function collectAuthorNames(author: unknown, names: Set<string>): void {
   }
 }
 
+/** Walks a JSON-LD tree (arrays and `@graph`) and collects `author` names and URLs. */
+function collectJsonLdAuthors(node: unknown, names: Set<string>, urls: Set<string>): void {
+  if (Array.isArray(node)) {
+    for (const item of node) {
+      collectJsonLdAuthors(item, names, urls);
+    }
+
+    return;
+  }
+
+  if (!node || typeof node !== 'object') {
+    return;
+  }
+
+  const obj = node as Record<string, unknown>;
+
+  collectAuthorNames(obj.author, names);
+  collectAuthorUrls(obj.author, urls);
+
+  if (Array.isArray(obj['@graph'])) {
+    collectJsonLdAuthors(obj['@graph'], names, urls);
+  }
+}
+
 /** Collects author names from meta tags and JSON-LD `author`, cross-checking Person blocks. */
 export function extractAuthors(
   $: cheerio.CheerioAPI,
@@ -150,29 +174,7 @@ export function extractAuthors(
 
   for (const parsed of blocks) {
     try {
-      const visit = (node: unknown): void => {
-        if (Array.isArray(node)) {
-          for (const n of node) {
-            visit(n);
-          }
-
-          return;
-        }
-
-        if (!node || typeof node !== 'object') {
-          return;
-        }
-
-        const obj = node as Record<string, unknown>;
-
-        collectAuthorNames(obj.author, names);
-        collectAuthorUrls(obj.author, urls);
-
-        if (Array.isArray(obj['@graph'])) {
-          visit(obj['@graph']);
-        }
-      };
-      visit(parsed);
+      collectJsonLdAuthors(parsed, names, urls);
     } catch {
       // ignore
     }

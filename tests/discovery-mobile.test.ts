@@ -77,18 +77,27 @@ async function withFetchStub(
 }
 
 describe('mobile page snapshot', () => {
-  test('a failed second GET is null and does not throw', async () => {
-    await withFetchStub(
-      (url) => failure(url),
-      async (calls) => {
-        const bundle = await runLocalDiscovery('https://example.com/');
-
-        expect(calls.some((call) => call.userAgent === MOBILE_CHROME_USER_AGENT)).toBe(true);
-        expect(bundle.mobilePage).toBeNull();
-        expect(bundle.mobileFetchError).toBe('network');
-        expect(bundle.pagesSampled).toBe(1);
+  test.each([
+    ['a failed second GET', (url: string) => failure(url), 'network'],
+    [
+      'a thrown second GET',
+      () => {
+        throw new Error('mobile down');
       },
-    );
+      undefined,
+    ],
+  ])('%s leaves the mobile snapshot null without throwing', async (_name, mobile, fetchError) => {
+    await withFetchStub(mobile, async (calls) => {
+      const bundle = await runLocalDiscovery('https://example.com/');
+
+      expect(calls.some((call) => call.userAgent === MOBILE_CHROME_USER_AGENT)).toBe(true);
+      expect(bundle.mobilePage).toBeNull();
+      expect(bundle.pagesSampled).toBe(1);
+
+      if (fetchError) {
+        expect(bundle.mobileFetchError).toBe(fetchError);
+      }
+    });
   });
   test('discovery declares a page-level audit scope', async () => {
     await withFetchStub(
@@ -100,18 +109,6 @@ describe('mobile page snapshot', () => {
         expect(kind.auditScope).toMatchObject({ level: 'page', pagesScored: 1 });
         expect(kind.auditScope.contextFetches.linksProbed).toBe(0);
         expect(audit.linkStatus.status).toBe('completed');
-      },
-    );
-  });
-  test('a thrown second GET is null and does not throw', async () => {
-    await withFetchStub(
-      () => {
-        throw new Error('mobile down');
-      },
-      async () => {
-        const bundle = await runLocalDiscovery('https://example.com/');
-
-        expect(bundle.mobilePage).toBeNull();
       },
     );
   });

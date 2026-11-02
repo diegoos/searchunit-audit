@@ -5,6 +5,7 @@ import {
   type SchemaRuleSet,
 } from '../../tools/schema/schemaRules.ts';
 import type { ParsedSchemaBlock } from '../../tools/schema/parseSchema.ts';
+import { asRecord } from '../../lib/guards.ts';
 
 interface StructuredDataBlock {
   type: string | null;
@@ -74,7 +75,6 @@ function hasProp(obj: Record<string, unknown>, key: string): boolean {
 }
 
 /** Recursively collects `sameAs` URLs from a JSON-LD node tree. */
-
 function collectSameAs(node: unknown, acc: Set<string>): void {
   if (Array.isArray(node)) {
     for (const item of node) {
@@ -107,7 +107,6 @@ function collectSameAs(node: unknown, acc: Set<string>): void {
 }
 
 /** Required property names missing on both the typed node and the script root. */
-
 function missingRuleProps(
   type: string,
   source: Record<string, unknown>,
@@ -144,7 +143,6 @@ function missingRecommendedProps(
 }
 
 /** Collects `@type` on this node and `@graph` items only (not nested properties). */
-
 function collectSchemaTypes(node: unknown, acc: Set<string>): void {
   if (Array.isArray(node)) {
     for (const item of node) {
@@ -201,14 +199,6 @@ function nodeHasSpeakableType(node: unknown): boolean {
 
     return nodeHasSpeakableType(val);
   });
-}
-
-function asRecord(value: unknown): Record<string, unknown> | null {
-  if (!value || typeof value !== 'object' || Array.isArray(value)) {
-    return null;
-  }
-
-  return value as Record<string, unknown>;
 }
 
 function stringOrNull(value: unknown): string | null {
@@ -450,13 +440,11 @@ function faqPairsFrom(nodes: unknown[]): FaqPair[] {
 const NON_SCHEMA_META_PROPERTY_PREFIX = /^(og|fb|twitter):/i;
 
 /** Returns true when a value references schema.org. */
-
 function isSchemaOrgUri(value: string): boolean {
   return value.trim().toLowerCase().includes('schema.org');
 }
 
 /** Detects a schema.org vocabulary scope declared on html/head/body via `vocab` or `prefix`. */
-
 function hasSchemaOrgVocabScope($: cheerio.CheerioAPI): boolean {
   for (const selector of ['html', 'head', 'body']) {
     const el = $(selector).first();
@@ -482,7 +470,6 @@ function hasSchemaOrgVocabScope($: cheerio.CheerioAPI): boolean {
 }
 
 /** Counts schema.org microdata itemscopes (itemtype referencing schema.org). */
-
 function countSchemaOrgMicrodata($: cheerio.CheerioAPI): number {
   let count = 0;
 
@@ -497,23 +484,33 @@ function countSchemaOrgMicrodata($: cheerio.CheerioAPI): number {
   return count;
 }
 
-/** Counts schema.org RDFa `typeof`/`property` occurrences, honoring a vocab scope. */
-
-function countSchemaOrgRdfa($: cheerio.CheerioAPI): number {
-  const vocabScope = hasSchemaOrgVocabScope($);
-  let count = 0;
+/**
+ * `typeof` values that name schema.org, or every non-prefixed value under a schema.org
+ * vocab scope. Each qualifying element contributes one value.
+ */
+function rdfaTypeofValues($: cheerio.CheerioAPI, vocabScope: boolean): string[] {
+  const values: string[] = [];
 
   $('[typeof]').each((_, el) => {
-    const typeofAttr = $(el).attr('typeof')?.trim();
+    const value = $(el).attr('typeof')?.trim();
 
-    if (!typeofAttr || NON_SCHEMA_META_PROPERTY_PREFIX.test(typeofAttr)) {
+    if (!value || NON_SCHEMA_META_PROPERTY_PREFIX.test(value)) {
       return;
     }
 
-    if (isSchemaOrgUri(typeofAttr) || vocabScope) {
-      count++;
+    if (isSchemaOrgUri(value) || vocabScope) {
+      values.push(value);
     }
   });
+
+  return values;
+}
+
+/** Counts schema.org RDFa `typeof`/`property` occurrences, honoring a vocab scope. */
+function countSchemaOrgRdfa($: cheerio.CheerioAPI): number {
+  const vocabScope = hasSchemaOrgVocabScope($);
+  let count = rdfaTypeofValues($, vocabScope).length;
+
   $('[property]').each((_, el) => {
     const prop = $(el).attr('property')?.trim();
 
@@ -591,19 +588,10 @@ function microdataTypes($: cheerio.CheerioAPI): string[] {
 
 function rdfaTypes($: cheerio.CheerioAPI): string[] {
   const types: string[] = [];
-  const vocabScope = hasSchemaOrgVocabScope($);
 
-  $('[typeof]').each((_, el) => {
-    const value = $(el).attr('typeof')?.trim();
-
-    if (!value || NON_SCHEMA_META_PROPERTY_PREFIX.test(value)) {
-      return;
-    }
-
-    if (isSchemaOrgUri(value) || vocabScope) {
-      pushMarkupType(types, value);
-    }
-  });
+  for (const value of rdfaTypeofValues($, hasSchemaOrgVocabScope($))) {
+    pushMarkupType(types, value);
+  }
 
   return types;
 }

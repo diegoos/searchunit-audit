@@ -22,7 +22,11 @@ const ROW_CAP = 30;
 const CELL_CAP = 10;
 const CELL_TEXT_CAP = 200;
 
-function collapse(text: string): string {
+/** Characters of main content text kept on a snapshot (audited and rendered). */
+export const MAIN_TEXT_CAP = 20_000;
+
+/** Collapses every whitespace run to one space and trims both ends. */
+export function collapseWhitespace(text: string): string {
   return text.replace(/\s+/g, ' ').trim();
 }
 
@@ -41,11 +45,35 @@ function readTables($: cheerio.CheerioAPI, root: ReturnType<cheerio.CheerioAPI>)
             .children('th, td')
             .slice(0, CELL_CAP)
             .toArray()
-            .map((cell) => collapse($(cell).text()).slice(0, CELL_TEXT_CAP)),
+            .map((cell) => collapseWhitespace($(cell).text()).slice(0, CELL_TEXT_CAP)),
         )
         .filter((cells) => cells.some(Boolean)),
     )
     .filter((rows) => rows.length > 0);
+}
+
+/**
+ * Detached copy of the content root: the first `main` / `[role=main]`, else every
+ * `article`, else `body` without page chrome.
+ */
+function contentRootClone($: cheerio.CheerioAPI): ReturnType<cheerio.CheerioAPI> {
+  const main = $(CONTENT_ROOT).first();
+
+  if (main.length > 0) {
+    return main.clone();
+  }
+
+  const articles = $('article');
+
+  if (articles.length > 0) {
+    return articles.clone();
+  }
+
+  const body = $('body').clone();
+
+  body.find(PAGE_CHROME).remove();
+
+  return body;
 }
 
 /**
@@ -55,18 +83,7 @@ function readTables($: cheerio.CheerioAPI, root: ReturnType<cheerio.CheerioAPI>)
  * so page chrome does not count as content.
  */
 export function extractMainContent($: cheerio.CheerioAPI): MainContent {
-  let root = $(CONTENT_ROOT).first();
-
-  if (root.length === 0) {
-    root = $('article');
-  }
-
-  let clone = root.clone();
-
-  if (root.length === 0) {
-    clone = $('body').clone();
-    clone.find(PAGE_CHROME).remove();
-  }
+  const clone = contentRootClone($);
 
   clone.find('script, style, noscript, template').remove();
 
@@ -74,7 +91,7 @@ export function extractMainContent($: cheerio.CheerioAPI): MainContent {
     clone
       .find(selector)
       .toArray()
-      .map((el) => collapse($(el).text()))
+      .map((el) => collapseWhitespace($(el).text()))
       .filter(Boolean);
   const paragraphs = texts('p');
   const listItems = texts('li');
@@ -84,5 +101,5 @@ export function extractMainContent($: cheerio.CheerioAPI): MainContent {
 
   clone.find(BLOCK_ELEMENTS).after(' ');
 
-  return { text: collapse(clone.text()), paragraphs, listItems, tables };
+  return { text: collapseWhitespace(clone.text()), paragraphs, listItems, tables };
 }

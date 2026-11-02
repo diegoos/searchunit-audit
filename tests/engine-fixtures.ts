@@ -10,18 +10,59 @@ import {
   type DiscoveryBundle,
 } from '../src/engine/discovery.ts';
 import { parseRobots } from '../src/tools/robots/parseRobots.ts';
-import {
-  computeAuditScores,
-  scoreCitabilityTexts,
-  type CriticalBlocker,
-} from '../src/engine/scoring.ts';
+import { scoreCitabilityTexts } from '../src/engine/scoring.ts';
+import { unrenderedPage } from '../src/engine/render.ts';
+import type { CruxFetchResult, LlmsTxtResult } from '../src/engine/types.ts';
 
-export function collectCriticalBlockers(bundle: DiscoveryBundle): CriticalBlocker[] {
-  const blockers: CriticalBlocker[] = [];
+export function llmsTxtFixture(over: Partial<LlmsTxtResult> = {}): LlmsTxtResult {
+  return {
+    url: 'https://example.com/llms.txt',
+    exists: false,
+    fetchStatus: 'missing',
+    fetchError: null,
+    format_valid: false,
+    has_title: false,
+    has_sections: false,
+    has_links: false,
+    section_count: 0,
+    link_count: 0,
+    links: [],
+    linksTruncated: false,
+    linksToAuditedUrl: false,
+    issues: [],
+    content: null,
+    full_content: null,
+    contentType: '',
+    full_version: { url: 'https://example.com/llms-full.txt', exists: false, contentType: '' },
+    ...over,
+  };
+}
 
-  computeAuditScores(bundle, blockers);
+/** CrUX field data with good Core Web Vitals, so technical foundations is measured. */
+export function cruxGoodFixture(url: string): CruxFetchResult {
+  const rating = { rating: 'good' };
 
-  return blockers;
+  return {
+    status: 'completed',
+    errors: [],
+    results: [
+      {
+        url,
+        origin: new URL(url).origin,
+        status: 'ok',
+        url_data: {
+          cwv_pass: true,
+          metrics: {
+            largest_contentful_paint: rating,
+            interaction_to_next_paint: rating,
+            cumulative_layout_shift: rating,
+          },
+        },
+        origin_data: null,
+        errors: [],
+      },
+    ],
+  };
 }
 
 export const PAGE_HTML = `<!doctype html>
@@ -81,26 +122,7 @@ export function bundleFromHtml(html: string): DiscoveryBundle {
   const crawlerAccess = parseRobotsTxt(
     'User-agent: *\nAllow: /\nSitemap: https://example.com/sitemap.xml\n',
   );
-  const llmsTxt = {
-    url: 'https://example.com/llms.txt',
-    exists: false,
-    fetchStatus: 'missing' as const,
-    fetchError: null,
-    format_valid: false,
-    has_title: false,
-    has_sections: false,
-    has_links: false,
-    section_count: 0,
-    link_count: 0,
-    links: [],
-    linksTruncated: false,
-    linksToAuditedUrl: false,
-    issues: [],
-    content: null,
-    full_content: null,
-    contentType: '',
-    full_version: { url: 'https://example.com/llms-full.txt', exists: false, contentType: '' },
-  };
+  const llmsTxt = llmsTxtFixture();
 
   return {
     domain: 'example.com',
@@ -169,6 +191,7 @@ export function bundleFromHtml(html: string): DiscoveryBundle {
       mainTextTruncated: false,
       tables: parsed.tables,
       mixedContent: parsed.mixedContent,
+      sameHostResources: parsed.sameHostResources,
       hiddenText: parsed.hiddenText,
       charset: parsed.charset,
       trustPages: parsed.trustPages,
@@ -206,6 +229,8 @@ export function bundleFromHtml(html: string): DiscoveryBundle {
     mobilePage: null,
     mobileFetchError: null,
     linkStatus: { status: 'skipped' as const, checked: 0, candidates: 0, results: [] },
+    httpsReadiness: null,
+    renderedPage: unrenderedPage('not-requested'),
     pagesSampled: 1,
 
     pageHeaders: headers,

@@ -10,7 +10,14 @@ import type { Finding, FindingSeverity } from '../engine/types.ts';
 import type { OutputFormat } from '../lib/args.ts';
 import { cruxApiKeyLabel } from '../lib/config.ts';
 import { googleProfileFields, type GoogleProfileSummary } from '../lib/googleProfile.ts';
-import { clipDetail, escapeMarkdown, formatReportHeader, stripControls } from '../lib/output.ts';
+import { payloadJson } from '../lib/invisibleText.ts';
+import {
+  clipDetail,
+  escapeMarkdown,
+  formatReportHeader,
+  stripControls,
+  type ReportKpi,
+} from '../lib/output.ts';
 import { formatTable } from '../lib/table.ts';
 import {
   bannerMark,
@@ -114,11 +121,7 @@ function crawlerKind(status: string): 'pass' | 'fail' | 'warn' {
   return status === 'blocked' ? 'fail' : 'warn';
 }
 
-function indexableKpi(report: AuditReport | KindReport): {
-  status: FindingSeverity;
-  label: string;
-  value: string;
-} {
+function indexableKpi(report: AuditReport | KindReport): ReportKpi {
   const page = report.discovery.auditedPage;
   const indexable = isPageIndexable(
     page.statusCode,
@@ -205,10 +208,13 @@ function appendGoogleProfile(lines: string[], profile: GoogleProfileSummary): vo
   lines.push(formatTable(['Field', 'Value'], googleProfileFields(profile)));
 }
 
-function appendCrawlerList(
-  lines: string[],
-  crawlers: readonly { bot: string; status: string }[],
-): void {
+/** One row of the crawler access list: a bot name and its robots.txt access. */
+interface CrawlerEntry {
+  bot: string;
+  status: string;
+}
+
+function appendCrawlerList(lines: string[], crawlers: readonly CrawlerEntry[]): void {
   lines.push('');
   lines.push(theme.heading('Crawlers'));
   lines.push('');
@@ -218,7 +224,7 @@ function appendCrawlerList(
   }
 }
 
-function htmlCrawlerSection(crawlers: readonly { bot: string; status: string }[]): string {
+function htmlCrawlerSection(crawlers: readonly CrawlerEntry[]): string {
   const rows = crawlers
     .map(
       (entry) => `<tr><td>${escapeHtml(entry.bot)}</td><td>${escapeHtml(entry.status)}</td></tr>`,
@@ -229,7 +235,7 @@ function htmlCrawlerSection(crawlers: readonly { bot: string; status: string }[]
   ${htmlTable(['Bot', 'Status'], rows)}`;
 }
 
-function markdownCrawlerSection(crawlers: readonly { bot: string; status: string }[]): string[] {
+function markdownCrawlerSection(crawlers: readonly CrawlerEntry[]): string[] {
   return [
     '## Crawlers',
     '',
@@ -440,7 +446,7 @@ function markdownGoogleProfile(profile: GoogleProfileSummary): string[] {
 /** Renders a Markdown report with overall scores, then SEO, GEO, and Google Profile. */
 function renderMarkdown(report: AuditReport): string {
   return [
-    `# Page Audit`,
+    '# Page Audit',
     '',
     escapeMarkdown(report.url),
     '',
@@ -467,16 +473,16 @@ function renderMarkdown(report: AuditReport): string {
   ].join('\n');
 }
 
-/** Serializes the full audit payload for --format=json. */
-function renderJson(report: AuditReport): string {
-  return `${JSON.stringify(report, null, 2)}\n`;
+/** Pretty JSON body for `--format=json` and `-o` `.json` files. */
+function jsonBody(payload: unknown): string {
+  return `${payloadJson(payload, 2)}\n`;
 }
 
 /** Renders the audit in the requested format. */
 export function renderAudit(report: AuditReport, format: OutputFormat): string {
   switch (format) {
     case 'json':
-      return renderJson(report);
+      return jsonBody(report);
     case 'html':
       return renderHtml(report);
     case 'markdown':
@@ -489,9 +495,7 @@ export function renderAudit(report: AuditReport, format: OutputFormat): string {
 function renderKindTable(report: KindReport): string {
   const title = KIND_TITLE[report.command];
   const overall = report.scores.overall;
-  const kpis: { status: FindingSeverity; label: string; value: string }[] = [
-    { ...titleKpi(report), label: 'Title' },
-  ];
+  const kpis: ReportKpi[] = [{ ...titleKpi(report), label: 'Title' }];
 
   if (report.kind === 'seo') {
     kpis.push(indexableKpi(report));
@@ -554,7 +558,7 @@ function renderKindMarkdown(report: KindReport): string {
 export function renderKindReport(report: KindReport, format: OutputFormat): string {
   switch (format) {
     case 'json':
-      return `${JSON.stringify(report, null, 2)}\n`;
+      return jsonBody(report);
     case 'html':
       return renderKindHtml(report);
     case 'markdown':

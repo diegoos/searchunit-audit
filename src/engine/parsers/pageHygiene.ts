@@ -1,4 +1,7 @@
 import type * as cheerio from 'cheerio';
+import { isLoopbackHost } from '../../ip-policy.ts';
+import { servedSecurely } from '../localTarget.ts';
+import { collapseWhitespace } from './mainContent.ts';
 
 export interface HeadingOutlineItem {
   level: number;
@@ -33,10 +36,6 @@ const HIDDEN_SAMPLE_CAP = 3;
 const HIDDEN_MIN_CHARS = 50;
 const SAMPLE_TEXT_CAP = 120;
 
-function collapse(text: string): string {
-  return text.replace(/\s+/g, ' ').trim();
-}
-
 /** H1–H6 in document order, empty headings kept as an empty `text`. */
 export function extractHeadingOutline($: cheerio.CheerioAPI): HeadingOutlineItem[] {
   return $('h1, h2, h3, h4, h5, h6')
@@ -44,7 +43,7 @@ export function extractHeadingOutline($: cheerio.CheerioAPI): HeadingOutlineItem
     .toArray()
     .map((el) => ({
       level: Number(el.tagName.slice(1)),
-      text: collapse($(el).text()).slice(0, HEADING_TEXT_CAP),
+      text: collapseWhitespace($(el).text()).slice(0, HEADING_TEXT_CAP),
     }));
 }
 
@@ -80,6 +79,7 @@ const PASSIVE_SOURCES: readonly [string, string][] = [
   ['audio[src]', 'src'],
 ];
 
+/** `http:` subresources on non-loopback hosts. Loopback is a secure context, so it is not mixed content. */
 function insecureUrls($: cheerio.CheerioAPI, sources: readonly [string, string][]): string[] {
   const urls: string[] = [];
 
@@ -87,7 +87,7 @@ function insecureUrls($: cheerio.CheerioAPI, sources: readonly [string, string][
     $(selector).each((_, el) => {
       const value = $(el).attr(attr)?.trim() ?? '';
 
-      if (/^http:\/\//i.test(value)) {
+      if (isInsecureSubresource(value)) {
         urls.push(value);
       }
     });
@@ -96,9 +96,24 @@ function insecureUrls($: cheerio.CheerioAPI, sources: readonly [string, string][
   return urls;
 }
 
-/** Plain `http:` subresources. Empty unless the page itself is `https:`. */
+function isInsecureSubresource(value: string): boolean {
+  if (!/^http:\/\//i.test(value)) {
+    return false;
+  }
+
+  try {
+    return !isLoopbackHost(new URL(value).hostname);
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Plain `http:` subresources. A page served over HTTPS, or a loopback page
+ * (checked as if it were HTTPS, for the production readiness), is inspected.
+ */
 export function extractMixedContent($: cheerio.CheerioAPI, base: URL): MixedContent {
-  if (base.protocol !== 'https:') {
+  if (!servedSecurely(base.href)) {
     return { activeCount: 0, passiveCount: 0, samples: [] };
   }
 
@@ -110,6 +125,49 @@ export function extractMixedContent($: cheerio.CheerioAPI, base: URL): MixedCont
     passiveCount: passive.length,
     samples: [...active, ...passive].slice(0, MIXED_SAMPLE_CAP),
   };
+}
+
+const RESOURCE_CAP = 30;
+const RENDER_RESOURCE_SOURCES: readonly [string, string][] = [
+  ['script[src]', 'src'],
+  ['link[rel~="stylesheet"][href]', 'href'],
+];
+
+/** Same-origin http(s) URL of a resource reference, or null. */
+function sameSiteUrl(value: string, base: URL): string | null {
+  if (!value) {
+    return null;
+  }
+
+  try {
+    const url = new URL(value, base);
+
+    return /^https?:$/.test(url.protocol) && sameSite(url, base) && url.port === base.port
+      ? url.href
+      : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Scripts and stylesheets on the audited host, up to 30. Googlebot must fetch
+ * these to render the page, so robots.txt rules on them matter.
+ */
+export function extractSameHostResources($: cheerio.CheerioAPI, base: URL): string[] {
+  const urls: string[] = [];
+
+  for (const [selector, attr] of RENDER_RESOURCE_SOURCES) {
+    $(selector).each((_, el) => {
+      const url = sameSiteUrl($(el).attr(attr)?.trim() ?? '', base);
+
+      if (url && !urls.includes(url) && urls.length < RESOURCE_CAP) {
+        urls.push(url);
+      }
+    });
+  }
+
+  return urls;
 }
 
 const HIDDEN_STYLE = /(?:^|;)\s*(?:display\s*:\s*none|visibility\s*:\s*hidden)\b/i;
@@ -138,7 +196,7 @@ export function extractHiddenText($: cheerio.CheerioAPI): HiddenText {
       return;
     }
 
-    const text = collapse(node.text());
+    const text = collapseWhitespace(node.text());
 
     if (text.length < HIDDEN_MIN_CHARS) {
       return;
@@ -213,7 +271,7 @@ function siteHost(value: URL): string {
   return value.hostname.replace(/^www\./i, '').toLowerCase();
 }
 
-function sameSite(url: URL, base: URL): boolean {
+export function sameSite(url: URL, base: URL): boolean {
   return siteHost(url) === siteHost(base);
 }
 
@@ -238,7 +296,7 @@ export function extractTrustPages($: cheerio.CheerioAPI, base: URL): TrustPages 
       return;
     }
 
-    const textSlug = labelSlug(collapse($(el).text()));
+    const textSlug = labelSlug(collapseWhitespace($(el).text()));
     const segments = pathSlugs(url.pathname);
 
     for (const key of keys) {

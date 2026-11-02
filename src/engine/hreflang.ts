@@ -6,8 +6,12 @@ type HreflangPage = Pick<AuditedPageSnapshot, 'url' | 'hreflangLinks' | 'headerH
 /** Language, optional script, optional region (ISO 3166-1 alpha-2 or UN M.49), or `x-default`. */
 const HREFLANG_CODE = /^(?:x-default|[a-z]{2,3}(?:-[a-z]{4})?(?:-(?:[a-z]{2}|\d{3}))?)$/i;
 
+function hrefKey(href: string): string {
+  return pageKey(href) ?? href;
+}
+
 function pairKey(link: { lang: string; href: string }): string {
-  return `${link.lang.toLowerCase()} ${pageKey(link.href) ?? link.href}`;
+  return `${link.lang.toLowerCase()} ${hrefKey(link.href)}`;
 }
 
 function sameSet(a: readonly string[], b: readonly string[]): boolean {
@@ -42,7 +46,7 @@ export function hreflangIssues(page: HreflangPage): string[] {
     const lang = link.lang.toLowerCase();
     const set = targets.get(lang) ?? new Set<string>();
 
-    set.add(pageKey(link.href) ?? link.href);
+    set.add(hrefKey(link.href));
     targets.set(lang, set);
   }
 

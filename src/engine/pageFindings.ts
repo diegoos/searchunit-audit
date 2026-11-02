@@ -2,13 +2,15 @@ import { pageKey } from '../lib/url.ts';
 import type { DiscoveryBundle } from './discovery.ts';
 import { hreflangIssues } from './hreflang.ts';
 import { firstHeadingSkip } from './parsers/pageHygiene.ts';
+import { directiveIsNoindex } from './robotsDirective.ts';
+import { crawlerAccessFromParsed } from './robotsTxtParser.ts';
 import { SEARCH_BOTS } from './scoring.ts';
 import type { Finding, FindingSeverity, PageLink } from './types.ts';
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 const DETAIL_LIST_CAP = 5;
 
-function finding(
+export function makeFinding(
   source: string,
   id: string,
   severity: FindingSeverity,
@@ -24,6 +26,15 @@ function listed(items: readonly string[], cap = DETAIL_LIST_CAP): string {
   return items.length > cap ? `${head} (+${items.length - cap} more)` : head;
 }
 
+/** Drops the `null` slots of checks that did not apply. */
+function presentFindings(items: (Finding | null)[]): Finding[] {
+  return items.filter((item): item is Finding => item !== null);
+}
+
+function heroImageOf(bundle: DiscoveryBundle) {
+  return bundle.auditedPage.images.items.find((item) => item.hero);
+}
+
 /** Googlebot and Bingbot access to the audited path in robots.txt. Gate finding. */
 export function searchCrawlerFinding(bundle: DiscoveryBundle): Finding {
   const rows = bundle.crawlerAccess.crawlers.filter((c) =>
@@ -32,13 +43,60 @@ export function searchCrawlerFinding(bundle: DiscoveryBundle): Finding {
   const title = 'Search crawlers on this path';
 
   if (rows.length === 0) {
-    return finding('discovery', 'search-crawlers', 'info', title, 'robots.txt not read');
+    return makeFinding('discovery', 'search-crawlers', 'info', title, 'robots.txt not read');
   }
 
   const detail = rows.map((c) => `${c.bot}=${c.status}`).join(' ');
   const blocked = rows.some((c) => c.status === 'blocked');
 
-  return finding('discovery', 'search-crawlers', blocked ? 'fail' : 'pass', title, detail);
+  return makeFinding('discovery', 'search-crawlers', blocked ? 'fail' : 'pass', title, detail);
+}
+
+/** Googlebot's access to a resource URL, from the same robots.txt rules as the page. */
+function googlebotAccess(parsed: NonNullable<DiscoveryBundle['parsedRobots']>, url: string) {
+  const resource = new URL(url);
+  const path = `${resource.pathname}${resource.search}`;
+
+  return crawlerAccessFromParsed(parsed, path).crawlers.find((c) => c.bot === 'Googlebot')?.status;
+}
+
+/**
+ * Scripts and stylesheets that robots.txt blocks or restricts for Googlebot.
+ * Googlebot cannot render the page without them. Independent of Chrome.
+ */
+export function blockedResourcesFinding(bundle: DiscoveryBundle): Finding {
+  const title = 'Render resources for Googlebot';
+  const resources = bundle.auditedPage.sameHostResources;
+  const parsed = bundle.parsedRobots;
+
+  if (parsed === null) {
+    return bundle.auditedPage.robotsStatus === 'error'
+      ? makeFinding('robots', 'blocked-resources', 'info', title, 'robots.txt not read')
+      : makeFinding('robots', 'blocked-resources', 'pass', title, 'no robots.txt rules');
+  }
+
+  const blocked = resources.filter((url) => {
+    const status = googlebotAccess(parsed, url);
+
+    return status !== undefined && status !== 'allowed';
+  });
+  if (blocked.length > 0) {
+    return makeFinding(
+      'robots',
+      'blocked-resources',
+      'warn',
+      title,
+      `${blocked.length} of ${resources.length} blocked or restricted: ${listed(blocked)}`,
+    );
+  }
+
+  return makeFinding(
+    'robots',
+    'blocked-resources',
+    'pass',
+    title,
+    `${resources.length} same-host script/stylesheet(s), none blocked`,
+  );
 }
 
 function mobileDiffs(bundle: DiscoveryBundle): { fail: string[]; warn: string[] } {
@@ -47,7 +105,7 @@ function mobileDiffs(bundle: DiscoveryBundle): { fail: string[]; warn: string[] 
   const fail: string[] = [];
   const warn: string[] = [];
 
-  if (/\bnoindex\b|\bnone\b/i.test(mobile.effectiveRobotsDirective ?? '')) {
+  if (directiveIsNoindex(mobile.effectiveRobotsDirective)) {
     fail.push('mobile noindex');
   }
 
@@ -82,7 +140,7 @@ export function mobileParityFinding(bundle: DiscoveryBundle): Finding {
   const title = 'Mobile parity';
 
   if (!bundle.mobilePage) {
-    return finding(
+    return makeFinding(
       'discovery',
       'mobile',
       'info',
@@ -94,14 +152,14 @@ export function mobileParityFinding(bundle: DiscoveryBundle): Finding {
   const { fail, warn } = mobileDiffs(bundle);
 
   if (fail.length > 0) {
-    return finding('discovery', 'mobile', 'fail', title, listed([...fail, ...warn]));
+    return makeFinding('discovery', 'mobile', 'fail', title, listed([...fail, ...warn]));
   }
 
   if (warn.length > 0) {
-    return finding('discovery', 'mobile', 'warn', title, listed(warn));
+    return makeFinding('discovery', 'mobile', 'warn', title, listed(warn));
   }
 
-  return finding(
+  return makeFinding(
     'discovery',
     'mobile',
     'pass',
@@ -114,13 +172,13 @@ function headingOrderFinding(bundle: DiscoveryBundle): Finding {
   const outline = bundle.auditedPage.headings.outline;
 
   if (outline.length === 0) {
-    return finding('content', 'heading-order', 'info', 'Heading order', 'no headings');
+    return makeFinding('content', 'heading-order', 'info', 'Heading order', 'no headings');
   }
 
   const skip = firstHeadingSkip(outline);
 
   if (skip) {
-    return finding(
+    return makeFinding(
       'content',
       'heading-order',
       'warn',
@@ -129,7 +187,7 @@ function headingOrderFinding(bundle: DiscoveryBundle): Finding {
     );
   }
 
-  return finding('content', 'heading-order', 'pass', 'Heading order', 'no skipped level');
+  return makeFinding('content', 'heading-order', 'pass', 'Heading order', 'no skipped level');
 }
 
 function parseDay(value: string | null): number | null {
@@ -165,7 +223,7 @@ function dateSanityFinding(bundle: DiscoveryBundle): Finding {
   const title = 'Date sanity';
 
   if (future.length > 0) {
-    return finding(
+    return makeFinding(
       'content',
       'date-sanity',
       'fail',
@@ -189,11 +247,11 @@ function dateSanityFinding(bundle: DiscoveryBundle): Finding {
   }
 
   if (warn.length > 0) {
-    return finding('content', 'date-sanity', 'warn', title, listed(warn));
+    return makeFinding('content', 'date-sanity', 'warn', title, listed(warn));
   }
 
   if (isFuture(vis)) {
-    return finding(
+    return makeFinding(
       'content',
       'date-sanity',
       'info',
@@ -203,17 +261,17 @@ function dateSanityFinding(bundle: DiscoveryBundle): Finding {
   }
 
   if (pub === null && mod === null && vis === null) {
-    return finding('content', 'date-sanity', 'info', title, 'no parseable date');
+    return makeFinding('content', 'date-sanity', 'info', title, 'no parseable date');
   }
 
-  return finding('content', 'date-sanity', 'pass', title, 'dates are consistent');
+  return makeFinding('content', 'date-sanity', 'pass', title, 'dates are consistent');
 }
 
 function hiddenTextFinding(bundle: DiscoveryBundle): Finding {
   const { elementCount, samples } = bundle.auditedPage.hiddenText;
 
   if (elementCount === 0) {
-    return finding(
+    return makeFinding(
       'content',
       'hidden-text',
       'pass',
@@ -222,7 +280,7 @@ function hiddenTextFinding(bundle: DiscoveryBundle): Finding {
     );
   }
 
-  return finding(
+  return makeFinding(
     'content',
     'hidden-text',
     'warn',
@@ -236,14 +294,14 @@ function mixedContentFinding(bundle: DiscoveryBundle): Finding {
   const title = 'Mixed content';
 
   if (!bundle.auditedUrl.startsWith('https://')) {
-    return finding('content', 'mixed-content', 'info', title, 'page is not https');
+    return makeFinding('content', 'mixed-content', 'info', title, 'page is not https');
   }
 
   if (activeCount + passiveCount === 0) {
-    return finding('content', 'mixed-content', 'pass', title, 'no http subresources');
+    return makeFinding('content', 'mixed-content', 'pass', title, 'no http subresources');
   }
 
-  return finding(
+  return makeFinding(
     'content',
     'mixed-content',
     activeCount > 0 ? 'fail' : 'warn',
@@ -254,7 +312,7 @@ function mixedContentFinding(bundle: DiscoveryBundle): Finding {
 
 /** Hero image loading: lazy or missing `fetchpriority="high"` warns. No hero image gives no finding. */
 function heroImageFinding(bundle: DiscoveryBundle): Finding | null {
-  const hero = bundle.auditedPage.images.items.find((item) => item.hero);
+  const hero = heroImageOf(bundle);
 
   if (!hero) {
     return null;
@@ -270,10 +328,16 @@ function heroImageFinding(bundle: DiscoveryBundle): Finding | null {
       prioritized ? null : 'no fetchpriority="high"',
     ].filter((reason): reason is string => reason !== null);
 
-    return finding('content', 'hero-image', 'warn', title, `${hero.src}: ${reasons.join(', ')}`);
+    return makeFinding(
+      'content',
+      'hero-image',
+      'warn',
+      title,
+      `${hero.src}: ${reasons.join(', ')}`,
+    );
   }
 
-  return finding(
+  return makeFinding(
     'content',
     'hero-image',
     'pass',
@@ -290,10 +354,10 @@ function trustPagesFinding(bundle: DiscoveryBundle): Finding {
   const title = 'Trust pages linked';
 
   if (missing.length === 0) {
-    return finding('content', 'trust-pages', 'pass', title, 'about, contact, privacy, terms');
+    return makeFinding('content', 'trust-pages', 'pass', title, 'about, contact, privacy, terms');
   }
 
-  return finding(
+  return makeFinding(
     'content',
     'trust-pages',
     missing.length >= 3 ? 'warn' : 'info',
@@ -336,14 +400,14 @@ function snippetFinding(bundle: DiscoveryBundle): Finding {
   const title = 'Snippet limits';
 
   if (warn.length > 0) {
-    return finding('meta', 'snippet-limits', 'warn', title, listed([...warn, ...info]));
+    return makeFinding('meta', 'snippet-limits', 'warn', title, listed([...warn, ...info]));
   }
 
   if (info.length > 0) {
-    return finding('meta', 'snippet-limits', 'info', title, listed(info));
+    return makeFinding('meta', 'snippet-limits', 'info', title, listed(info));
   }
 
-  return finding('meta', 'snippet-limits', 'pass', title, 'no snippet limits');
+  return makeFinding('meta', 'snippet-limits', 'pass', title, 'no snippet limits');
 }
 
 function charsetFinding(bundle: DiscoveryBundle): Finding {
@@ -353,14 +417,14 @@ function charsetFinding(bundle: DiscoveryBundle): Finding {
   const charset = header ?? meta;
 
   if (!charset) {
-    return finding('meta', 'charset', 'warn', 'Charset', 'no header or meta charset');
+    return makeFinding('meta', 'charset', 'warn', 'Charset', 'no header or meta charset');
   }
 
   if (header && meta && header !== meta) {
-    return finding('meta', 'charset', 'warn', 'Charset', `header ${header} vs meta ${meta}`);
+    return makeFinding('meta', 'charset', 'warn', 'Charset', `header ${header} vs meta ${meta}`);
   }
 
-  return finding('meta', 'charset', charset === 'utf-8' ? 'pass' : 'info', 'Charset', charset);
+  return makeFinding('meta', 'charset', charset === 'utf-8' ? 'pass' : 'info', 'Charset', charset);
 }
 
 function headerCanonicalFinding(bundle: DiscoveryBundle): Finding | null {
@@ -372,15 +436,14 @@ function headerCanonicalFinding(bundle: DiscoveryBundle): Finding | null {
 
   const expected = pageKey(page.canonicalUrl ?? page.url);
   const actual = pageKey(page.headerCanonical);
+  const matches = actual === expected;
 
-  return finding(
+  return makeFinding(
     'meta',
     'header-canonical',
-    actual === expected ? 'pass' : 'warn',
+    matches ? 'pass' : 'warn',
     'Link header canonical',
-    actual === expected
-      ? page.headerCanonical
-      : `${page.headerCanonical} vs ${page.canonicalUrl ?? page.url}`,
+    matches ? page.headerCanonical : `${page.headerCanonical} vs ${page.canonicalUrl ?? page.url}`,
   );
 }
 
@@ -394,7 +457,7 @@ function hreflangFinding(bundle: DiscoveryBundle): Finding | null {
   const issues = hreflangIssues(page);
   const count = Math.max(page.hreflangLinks.length, page.headerHreflang.length);
 
-  return finding(
+  return makeFinding(
     'meta',
     'hreflang',
     issues.length > 0 ? 'warn' : 'pass',
@@ -403,12 +466,13 @@ function hreflangFinding(bundle: DiscoveryBundle): Finding | null {
   );
 }
 
-const LOGO_PATH = /logo|icon/i;
+/** A path segment or file-name part that is a logo or an icon, such as `site-logo.png` or `/icons/`. */
+const LOGO_PATH = /(?:^|[/_.-])(?:logo|icons?|favicon)(?:[/_.-]|$)/i;
 
 /** og:image whose path names a logo or icon, while the page has a hero image. Warns only in that case. */
 function ogImageHeroFinding(bundle: DiscoveryBundle): Finding | null {
   const ogImage = bundle.auditedPage.social.openGraph.image;
-  const hero = bundle.auditedPage.images.items.find((item) => item.hero);
+  const hero = heroImageOf(bundle);
 
   if (!ogImage || !hero) {
     return null;
@@ -418,7 +482,7 @@ function ogImageHeroFinding(bundle: DiscoveryBundle): Finding | null {
     return null;
   }
 
-  return finding(
+  return makeFinding(
     'meta',
     'og-image-hero',
     'warn',
@@ -429,25 +493,147 @@ function ogImageHeroFinding(bundle: DiscoveryBundle): Finding | null {
 
 /** Page-level meta findings that need headers or parsed page facts. */
 export function pageMetaFindings(bundle: DiscoveryBundle): Finding[] {
-  return [
+  return presentFindings([
     snippetFinding(bundle),
     charsetFinding(bundle),
     headerCanonicalFinding(bundle),
     hreflangFinding(bundle),
     ogImageHeroFinding(bundle),
-  ].filter((item): item is Finding => item !== null);
+  ]);
+}
+
+const MISSING_PAGE_TEXT =
+  /not found|página não encontrada|page not found|não existe|^\s*404\b|\b(?:erro|error) 404\b/i;
+/** In a title segment or an H1, a 404 counts only at the start, so "Top 404 errors" is not a missing page. */
+const MISSING_PAGE_HEADING =
+  /not found|página não encontrada|page not found|não existe|^\s*(?:404|erro 404|error 404)\b/i;
+/** Title segments: "404 - Página não encontrada | Loja" has three. A colon does not split. */
+const TITLE_SEPARATOR = /\s+[-–—|]\s+|[|–—]/;
+/** A missing-page heading is short. "Erro 404: como corrigir no WordPress" is an article title. */
+const SOFT_404_SEGMENT_WORD_CAP = 5;
+const SOFT_404_WORD_CAP = 50;
+/** A title or H1 that names a missing page counts only on a short page; articles about 404 errors do not. */
+const SOFT_404_HEADING_WORD_CAP = 300;
+
+function namesMissingPage(text: string): boolean {
+  return text.split(TITLE_SEPARATOR).some((segment) => {
+    const words = segment.trim().split(/\s+/).filter(Boolean);
+
+    return (
+      words.length > 0 &&
+      words.length <= SOFT_404_SEGMENT_WORD_CAP &&
+      MISSING_PAGE_HEADING.test(words.join(' '))
+    );
+  });
+}
+
+/**
+ * A 2xx page whose title or H1 says it is missing, or whose thin text does.
+ * Google reads these as soft 404s. The score does not change (D3).
+ */
+function soft404Finding(bundle: DiscoveryBundle): Finding | null {
+  const page = bundle.auditedPage;
+
+  if (page.statusCode < 200 || page.statusCode >= 300) {
+    return null;
+  }
+
+  const title = 'Soft 404';
+  const headingSays =
+    page.wordCount < SOFT_404_HEADING_WORD_CAP &&
+    ((page.title !== null && namesMissingPage(page.title)) ||
+      page.headings.h1.some(namesMissingPage));
+  const thinSays = page.wordCount < SOFT_404_WORD_CAP && MISSING_PAGE_TEXT.test(page.mainText);
+
+  if (headingSays) {
+    return makeFinding(
+      'content',
+      'soft-404',
+      'fail',
+      title,
+      'title or H1 says the page is missing',
+    );
+  }
+
+  if (thinSays) {
+    return makeFinding(
+      'content',
+      'soft-404',
+      'fail',
+      title,
+      `${page.wordCount} words and missing-page text on a 2xx page`,
+    );
+  }
+
+  return makeFinding('content', 'soft-404', 'pass', title, 'no missing-page text on a 2xx page');
+}
+
+const SESSION_PARAMS = new Set(['jsessionid', 'phpsessid', 'sid', 'sessionid']);
+const URL_QUERY_CAP = 3;
+const URL_DEPTH_CAP = 4;
+
+function hasSessionId(url: URL): boolean {
+  const inPath = /;jsessionid=/i.test(url.pathname);
+  const inQuery = [...url.searchParams.keys()].some((key) => SESSION_PARAMS.has(key.toLowerCase()));
+
+  return inPath || inQuery;
+}
+
+/**
+ * URL shape from the technical KB: uppercase in the path, `_` in the slug, a
+ * session id (warn), more than 3 query parameters, or depth above 4 (info).
+ */
+function urlStructureFinding(bundle: DiscoveryBundle): Finding {
+  const url = new URL(bundle.auditedPage.url);
+  const segments = url.pathname.split('/').filter(Boolean);
+  const queryCount = url.searchParams.size;
+  const hasUppercase = /[A-Z]/.test(url.pathname.replace(/%[0-9a-f]{2}/gi, ''));
+  const sessionId = hasSessionId(url);
+  const notes: string[] = [];
+
+  if (sessionId) {
+    notes.push('session id in URL');
+  }
+
+  if (hasUppercase) {
+    notes.push('uppercase in path');
+  }
+
+  if ((segments.at(-1) ?? '').includes('_')) {
+    notes.push('underscore in slug');
+  }
+
+  if (queryCount > URL_QUERY_CAP) {
+    notes.push(`${queryCount} query parameters`);
+  }
+
+  if (segments.length > URL_DEPTH_CAP) {
+    notes.push(`depth ${segments.length}`);
+  }
+
+  const title = 'URL structure';
+
+  if (notes.length === 0) {
+    return makeFinding('content', 'url-structure', 'pass', title, 'clean URL');
+  }
+
+  const severity = sessionId ? 'warn' : 'info';
+
+  return makeFinding('content', 'url-structure', severity, title, notes.join(', '));
 }
 
 /** Page-level content findings for the SEO kind. */
 export function pageContentFindings(bundle: DiscoveryBundle): Finding[] {
-  return [
+  return presentFindings([
     headingOrderFinding(bundle),
     dateSanityFinding(bundle),
     hiddenTextFinding(bundle),
     mixedContentFinding(bundle),
     trustPagesFinding(bundle),
     heroImageFinding(bundle),
-  ].filter((item): item is Finding => item !== null);
+    soft404Finding(bundle),
+    urlStructureFinding(bundle),
+  ]);
 }
 
 const GENERIC_ANCHOR =
@@ -475,7 +661,7 @@ function brokenLinkFinding(bundle: DiscoveryBundle): Finding {
   const checked = `${bundle.linkStatus.checked} checked`;
 
   if (internal.length > 0) {
-    return finding(
+    return makeFinding(
       'links',
       'status',
       'fail',
@@ -485,7 +671,7 @@ function brokenLinkFinding(bundle: DiscoveryBundle): Finding {
   }
 
   if (failed.length > 0) {
-    return finding(
+    return makeFinding(
       'links',
       'status',
       'info',
@@ -494,7 +680,7 @@ function brokenLinkFinding(bundle: DiscoveryBundle): Finding {
     );
   }
 
-  return finding('links', 'status', 'pass', title, `${checked}; all 2xx/3xx`);
+  return makeFinding('links', 'status', 'pass', title, `${checked}; all 2xx/3xx`);
 }
 
 function redirectedLinkFinding(bundle: DiscoveryBundle): Finding {
@@ -503,10 +689,10 @@ function redirectedLinkFinding(bundle: DiscoveryBundle): Finding {
   );
 
   if (redirected.length === 0) {
-    return finding('links', 'redirects', 'pass', 'Internal link redirects', 'none');
+    return makeFinding('links', 'redirects', 'pass', 'Internal link redirects', 'none');
   }
 
-  return finding(
+  return makeFinding(
     'links',
     'redirects',
     'warn',
@@ -524,10 +710,16 @@ function anchorTextFinding(bundle: DiscoveryBundle): Finding {
     );
 
   if (generic.length === 0) {
-    return finding('links', 'anchor-text', 'pass', 'Anchor text', 'no generic anchors');
+    return makeFinding('links', 'anchor-text', 'pass', 'Anchor text', 'no generic anchors');
   }
 
-  return finding('links', 'anchor-text', 'warn', 'Anchor text', listed(generic, ANCHOR_LIST_CAP));
+  return makeFinding(
+    'links',
+    'anchor-text',
+    'warn',
+    'Anchor text',
+    listed(generic, ANCHOR_LIST_CAP),
+  );
 }
 
 /** Link findings. Status rows only when `audit` ran the probe. */

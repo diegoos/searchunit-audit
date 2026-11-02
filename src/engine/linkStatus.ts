@@ -3,7 +3,7 @@ import { pageKey } from '../lib/url.ts';
 import type { LinkCheck, LinkStatusReport, PageLink } from './types.ts';
 
 /** Most same-site links probed per audit. */
-export const INTERNAL_LINK_CHECK_CAP = 25;
+const INTERNAL_LINK_CHECK_CAP = 25;
 
 const LINK_CHECK_TIMEOUT_MS = 5000;
 const LINK_CHECK_CONCURRENCY = 6;

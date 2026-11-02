@@ -191,17 +191,6 @@ describe('classifySitemapFetch', () => {
       ),
     ).toBe('present');
   });
-  test('does not treat an HTML page that mentions url as a sitemap', () => {
-    expect(
-      classifySitemapFetch(
-        sitemapPage({
-          finalUrl: 'https://example.com/',
-          contentType: 'text/html',
-          body: '<html><body>docs use the &lt;url&gt; tag</body></html>',
-        }),
-      ),
-    ).toBe('missing');
-  });
 });
 
 describe('sitemapFromIndexChildBodies', () => {

@@ -1,6 +1,7 @@
 import * as cheerio from 'cheerio';
 import { hrefWithoutUserinfo } from '../../lib/url.ts';
 import { linkHrefByRel, metaContentByName } from '../../tools/meta/parseMeta.ts';
+import { collapseWhitespace } from './mainContent.ts';
 
 export interface ImageItem {
   src: string;
@@ -18,6 +19,11 @@ export interface ImageItem {
 export interface VideoSignal {
   src: string | null;
   poster: string | null;
+}
+
+export interface DiscoverSignals {
+  maxImagePreviewLarge: boolean;
+  hasRepresentativeImage: boolean;
 }
 
 export interface ImageSignals {
@@ -47,19 +53,13 @@ function firstSrcsetUrl(value: string | null): string | null {
 }
 
 function nearbyText($: cheerio.CheerioAPI, el: Parameters<cheerio.CheerioAPI>[0]): string | null {
-  const caption = $(el)
-    .closest('figure')
-    .find('figcaption')
-    .first()
-    .text()
-    .replace(/\s+/g, ' ')
-    .trim();
+  const caption = collapseWhitespace($(el).closest('figure').find('figcaption').first().text());
 
   if (caption) {
     return caption.slice(0, 160);
   }
 
-  const next = $(el).next().text().replace(/\s+/g, ' ').trim();
+  const next = collapseWhitespace($(el).next().text());
 
   return next ? next.slice(0, 160) : null;
 }
@@ -92,14 +92,9 @@ function isHeroCandidate(
 function imageSource(node: ReturnType<cheerio.CheerioAPI>, srcset: string | null): string | null {
   const candidates = [node.attr('src'), node.attr('data-src'), node.attr('data-lazy-src')]
     .map((value) => value?.trim())
-    .filter((value): value is string => Boolean(value) && !value!.startsWith('data:'));
+    .filter((value): value is string => !!value && !value.startsWith('data:'));
 
   return candidates[0] ?? firstSrcsetUrl(srcset ?? imageAttr(node.attr('data-srcset')));
-}
-
-export interface DiscoverSignals {
-  maxImagePreviewLarge: boolean;
-  hasRepresentativeImage: boolean;
 }
 
 /** Counts images and alt-text coverage (with/missing alt). */

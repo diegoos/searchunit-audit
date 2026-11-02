@@ -2,12 +2,13 @@
  * GEO component scoring for local audits. Keep scores here; do not add them
  * in commands or render.
  */
-import { isLoopbackHostname, isLoopbackIpString } from '../ip-policy.ts';
 import { DEFAULT_MAX_BODY_BYTES } from '../lib/maxBodyBytes.ts';
+import type { StructuredDataSummary } from './htmlParser.ts';
 import type { CrawlerAccessStatus } from './robotsTxtParser.ts';
 import { expectedSchemaTypes } from './pageClassification.ts';
 import { isNoindexCombined, isPageIndexable } from './robotsDirective.ts';
 import { hreflangIssues } from './hreflang.ts';
+import { isLocalTarget, servedSecurely } from './localTarget.ts';
 import {
   CITABILITY_IDEAL_MAX_WORDS,
   CITABILITY_IDEAL_MIN_WORDS,
@@ -153,24 +154,6 @@ function weightedAverage(parts: WeightedScorePart[]): number | null {
   return total / weightSum;
 }
 
-function isHttps(url: string): boolean {
-  return url.startsWith('https://');
-}
-
-/**
- * A loopback target (dev server). Its HTTPS state is not judged: the audit
- * treats it as served over HTTPS and reports that it did so.
- */
-export function isLocalTarget(url: string): boolean {
-  try {
-    const { hostname } = new URL(url);
-
-    return isLoopbackHostname(hostname) || isLoopbackIpString(hostname);
-  } catch {
-    return false;
-  }
-}
-
 function crawlerBotScore(status: CrawlerAccessStatus): number {
   if (status === 'allowed') {
     return 100;
@@ -241,6 +224,10 @@ const RATING_SCORE: Record<string, number> = {
   poor: 20,
 };
 
+function isKnownRating(rating: string | undefined): rating is string {
+  return Boolean(rating) && rating !== 'unknown';
+}
+
 function readCoreWebVitals(discovery: DiscoveryResult): CwvReading {
   const results = (discovery.crux.results ?? []) as CruxUrlResult[];
   const match = results.find((r) => r.url === discovery.auditedPage.url) ?? results[0] ?? null;
@@ -249,11 +236,9 @@ function readCoreWebVitals(discovery: DiscoveryResult): CwvReading {
     return { score: null, evidence: 'insufficient', poor: false };
   }
 
-  const urlHasVital = CORE_VITALS.some((name) => {
-    const rating = match.url_data?.metrics[name]?.rating;
-
-    return Boolean(rating) && rating !== 'unknown';
-  });
+  const urlHasVital = CORE_VITALS.some((name) =>
+    isKnownRating(match.url_data?.metrics[name]?.rating),
+  );
   const record = urlHasVital ? match.url_data : match.origin_data;
 
   if (!record) {
@@ -263,9 +248,7 @@ function readCoreWebVitals(discovery: DiscoveryResult): CwvReading {
   const evidence: EvidenceType = urlHasVital ? 'direct' : 'indirect';
   const vitalRating = (name: (typeof CORE_VITALS)[number]): string | undefined =>
     record.metrics[name]?.rating;
-  const ratings = CORE_VITALS.map((name) => vitalRating(name)).filter(
-    (r): r is string => Boolean(r) && r !== 'unknown',
-  );
+  const ratings = CORE_VITALS.map((name) => vitalRating(name)).filter(isKnownRating);
 
   if (ratings.length === 0) {
     return { score: null, evidence: 'insufficient', poor: false };
@@ -327,6 +310,17 @@ function indexabilityScore(
   return indexability;
 }
 
+/** Lowers `score` to the blocker's cap, recording the blocker when `collect` is given. */
+function applyCap(score: number, blocker: CriticalBlocker, collect?: CriticalBlocker[]): number {
+  collect?.push(blocker);
+
+  return Math.min(score, blocker.cap);
+}
+
+function technicalBlocker(id: CriticalBlockerId, cap: number): CriticalBlocker {
+  return { id, component: 'technical_foundations', cap };
+}
+
 function applyTechnicalCaps(
   score: number,
   discovery: DiscoveryResult,
@@ -339,31 +333,22 @@ function applyTechnicalCaps(
   let next = score;
 
   if (p.statusCode < 200 || p.statusCode >= 300 || noindex) {
-    next = Math.min(next, 20);
-    collect?.push({ id: 'noindex_or_error', component: 'technical_foundations', cap: 20 });
+    next = applyCap(next, technicalBlocker('noindex_or_error', 20), collect);
   }
 
   if (!https) {
-    next = Math.min(next, 40);
-    collect?.push({ id: 'no_https', component: 'technical_foundations', cap: 40 });
+    next = applyCap(next, technicalBlocker('no_https', 40), collect);
   }
 
   if (poorCwv) {
-    next = Math.min(next, 50);
-    collect?.push({ id: 'poor_core_web_vitals', component: 'technical_foundations', cap: 50 });
-  }
-
-  if (p.jsRenderingRisk.isLikelyCsr) {
-    next = Math.min(next, 40);
-    collect?.push({ id: 'csr_only_rendering', component: 'technical_foundations', cap: 40 });
+    next = applyCap(next, technicalBlocker('poor_core_web_vitals', 50), collect);
   }
 
   // Googlebot indexes the first 2 MiB of uncompressed HTML.
   // https://www.debugbear.com/blog/googlebot-crawler-file-size-limit
 
   if (p.byteLength > DEFAULT_MAX_BODY_BYTES) {
-    next = Math.min(next, 60);
-    collect?.push({ id: 'oversized_html', component: 'technical_foundations', cap: 60 });
+    next = applyCap(next, technicalBlocker('oversized_html', 60), collect);
   }
 
   return next;
@@ -380,8 +365,7 @@ function scoreTechnical(discovery: DiscoveryResult, collect?: CriticalBlocker[])
     sh.x_robots_tag,
     p.metaRobotsByBot,
   );
-  const localTarget = isLocalTarget(p.url);
-  const https = isHttps(p.url) || localTarget;
+  const https = servedSecurely(p.url);
   const cwv = readCoreWebVitals(discovery);
 
   const crawlability =
@@ -389,10 +373,12 @@ function scoreTechnical(discovery: DiscoveryResult, collect?: CriticalBlocker[])
     (p.robotsStatus === 'present' && !searchBotBlocked(discovery) ? 30 : 0) +
     (p.sitemapStatus === 'present' ? 30 : 0);
 
-  const headerCount = [sh.hsts, sh.csp, sh.x_frame, sh.x_content_type, sh.referrer_policy].filter(
-    Boolean,
-  ).length;
-  const security = (https ? 60 : 0) + headerCount * 8;
+  // Browsers ignore HSTS received over http: (RFC 6797 §8.1), so loopback does not count it.
+  const headerChecks = isLocalTarget(p.url)
+    ? [sh.csp, sh.x_frame, sh.x_content_type, sh.referrer_policy]
+    : [sh.hsts, sh.csp, sh.x_frame, sh.x_content_type, sh.referrer_policy];
+  const presentHeaders = headerChecks.filter(Boolean).length;
+  const security = (https ? 60 : 0) + (presentHeaders * 40) / headerChecks.length;
   const mobile = p.viewport ? 100 : 20;
 
   const score = weightedAverage([
@@ -512,7 +498,7 @@ function scoreContentQuality(
     (p.author.hasAuthor ? 30 : 0) +
     (p.dates.published ? 15 : 0) +
     (p.dates.modified ? 20 : 0) +
-    (isHttps(p.url) ? 20 : 0) +
+    (servedSecurely(p.url) ? 20 : 0) +
     (p.title && p.metaDescription ? 15 : 0);
 
   const depth = contentDepth(p.wordCount);
@@ -522,21 +508,17 @@ function scoreContentQuality(
   const imageAltScore =
     p.images.total === 0 ? 50 : clamp((p.images.withAlt / p.images.total) * 100);
 
-  let score = weightedAverage([
-    { value: Math.min(100, eeat), weight: 0.35 },
-    { value: depth, weight: 0.25 },
-    { value: freshness, weight: 0.2 },
-    { value: Math.min(100, editorial), weight: 0.1 },
-    { value: imageAltScore, weight: 0.1 },
-  ]);
-
-  if (score === null) {
-    score = 0;
-  }
+  let score =
+    weightedAverage([
+      { value: Math.min(100, eeat), weight: 0.35 },
+      { value: depth, weight: 0.25 },
+      { value: freshness, weight: 0.2 },
+      { value: Math.min(100, editorial), weight: 0.1 },
+      { value: imageAltScore, weight: 0.1 },
+    ]) ?? 0;
 
   if (p.wordCount < 120) {
-    score = Math.min(score, 35);
-    collect?.push({ id: 'thin_content', component: 'content_quality', cap: 35 });
+    score = applyCap(score, { id: 'thin_content', component: 'content_quality', cap: 35 }, collect);
   }
 
   return { score: clamp(score), evidence: 'direct' };
@@ -549,9 +531,7 @@ function scoreStructuredData(
   const p = discovery.auditedPage;
   const sd = p.structuredData;
 
-  // No structured data is a critical blocker that caps this component at 25
-
-  // (minimum readiness), not 15.
+  // No structured data caps this component at 25 (minimum readiness), not 15.
 
   if (sd.blocks.length === 0) {
     collect?.push({ id: 'no_structured_data', component: 'structured_data', cap: 25 });
@@ -568,41 +548,43 @@ function scoreStructuredData(
   const validBlocks = sd.blocks.filter((b) => b.hasRequiredProps).length;
   const validation = clamp((validBlocks / sd.blocks.length) * 100 - sd.parse_errors * 15);
 
-  let entityGraph = 35;
-
-  if (sd.hasGraph) {
-    entityGraph = 90;
-  } else if (sd.blocks.some((b) => b.sameAs.length > 0)) {
-    entityGraph = 70;
-  }
-
-  // Sub-component: GEO-relevant signals inside structured data (speakable, sameAs, org).
-
-  let geoReadinessFromStructuredData = 25;
-
-  if (p.hasSpeakable) {
-    geoReadinessFromStructuredData = 100;
-  } else if (
-    sd.blocks.some((b) => b.sameAs.length > 0) &&
-    sd.blocks.some((b) => b.type?.toLowerCase().includes('organization'))
-  ) {
-    geoReadinessFromStructuredData = 95;
-  } else if (sd.blocks.some((b) => b.sameAs.length > 0) || p.author.hasAuthor) {
-    geoReadinessFromStructuredData = 65;
-  }
-
-  let score = weightedAverage([
-    { value: coverage, weight: 0.3 },
-    { value: validation, weight: 0.3 },
-    { value: entityGraph, weight: 0.25 },
-    { value: geoReadinessFromStructuredData, weight: 0.15 },
-  ]);
-
-  if (score === null) {
-    score = 25;
-  }
+  const score =
+    weightedAverage([
+      { value: coverage, weight: 0.3 },
+      { value: validation, weight: 0.3 },
+      { value: entityGraphScore(sd), weight: 0.25 },
+      { value: geoReadinessScore(p, sd), weight: 0.15 },
+    ]) ?? 25;
 
   return { score: clamp(score), evidence: 'direct' };
+}
+
+function hasSameAsLinks(sd: StructuredDataSummary): boolean {
+  return sd.blocks.some((b) => b.sameAs.length > 0);
+}
+
+function entityGraphScore(sd: StructuredDataSummary): number {
+  if (sd.hasGraph) {
+    return 90;
+  }
+
+  return hasSameAsLinks(sd) ? 70 : 35;
+}
+
+/** GEO-relevant structured data: speakable, then sameAs on an Organization, then sameAs or an author. */
+function geoReadinessScore(
+  page: DiscoveryResult['auditedPage'],
+  sd: StructuredDataSummary,
+): number {
+  if (page.hasSpeakable) {
+    return 100;
+  }
+
+  if (hasSameAsLinks(sd) && sd.blocks.some((b) => b.type?.toLowerCase().includes('organization'))) {
+    return 95;
+  }
+
+  return hasSameAsLinks(sd) || page.author.hasAuthor ? 65 : 25;
 }
 
 const CITABILITY_WEIGHTS = {
@@ -748,39 +730,49 @@ function scoreCitabilityUniqueness(text: string): number {
 const CITABILITY_TEXT_CAP = 1500;
 const CITABILITY_PREVIEW_CAP = 120;
 
+function scoreCitabilityDimensions(text: string, words: number): CitabilityDimensions {
+  return {
+    answer_block: scoreCitabilityAnswer(text, words),
+    self_containment: scoreCitabilitySelf(text, words),
+    structure: scoreCitabilityStructure(text, words),
+    statistical_density: scoreCitabilityStats(text),
+    uniqueness: scoreCitabilityUniqueness(text),
+  };
+}
+
+/** Weighted block score, rounded to an integer. */
+function citabilityTotal(dimensions: CitabilityDimensions): number {
+  return Math.round(
+    dimensions.answer_block * CITABILITY_WEIGHTS.answer_block +
+      dimensions.self_containment * CITABILITY_WEIGHTS.self_containment +
+      dimensions.structure * CITABILITY_WEIGHTS.structure +
+      dimensions.statistical_density * CITABILITY_WEIGHTS.statistical_density +
+      dimensions.uniqueness * CITABILITY_WEIGHTS.uniqueness,
+  );
+}
+
+function scoreCitabilityBlock(text: string, textCap: number): CitabilityBlockScore {
+  const words = citabilityWordCount(text);
+  const dimensions = scoreCitabilityDimensions(text, words);
+  const score = citabilityTotal(dimensions);
+
+  return {
+    text: Number.isFinite(textCap) ? text.slice(0, textCap) : text,
+    text_preview: text.slice(0, CITABILITY_PREVIEW_CAP),
+    word_count: words,
+    score,
+    dimensions,
+    in_ideal_word_range: words >= CITABILITY_IDEAL_MIN_WORDS && words <= CITABILITY_IDEAL_MAX_WORDS,
+    citation_ready: score >= 70,
+  };
+}
+
 /** Five-dimension citability scores (GEO). Parser only supplies candidate texts. */
 export function scoreCitabilityTexts(
   texts: string[],
   textCap = CITABILITY_TEXT_CAP,
 ): CitabilitySummary {
-  const blocks: CitabilityBlockScore[] = texts.map((text) => {
-    const words = citabilityWordCount(text);
-    const dimensions: CitabilityDimensions = {
-      answer_block: scoreCitabilityAnswer(text, words),
-      self_containment: scoreCitabilitySelf(text, words),
-      structure: scoreCitabilityStructure(text, words),
-      statistical_density: scoreCitabilityStats(text),
-      uniqueness: scoreCitabilityUniqueness(text),
-    };
-    const score = Math.round(
-      dimensions.answer_block * CITABILITY_WEIGHTS.answer_block +
-        dimensions.self_containment * CITABILITY_WEIGHTS.self_containment +
-        dimensions.structure * CITABILITY_WEIGHTS.structure +
-        dimensions.statistical_density * CITABILITY_WEIGHTS.statistical_density +
-        dimensions.uniqueness * CITABILITY_WEIGHTS.uniqueness,
-    );
-
-    return {
-      text: Number.isFinite(textCap) ? text.slice(0, textCap) : text,
-      text_preview: text.slice(0, CITABILITY_PREVIEW_CAP),
-      word_count: words,
-      score,
-      dimensions,
-      in_ideal_word_range:
-        words >= CITABILITY_IDEAL_MIN_WORDS && words <= CITABILITY_IDEAL_MAX_WORDS,
-      citation_ready: score >= 70,
-    };
-  });
+  const blocks: CitabilityBlockScore[] = texts.map((text) => scoreCitabilityBlock(text, textCap));
   const scored = blocks.filter((b) => b.word_count >= 25);
   const ranked = scored.toSorted((a, b) => b.score - a.score);
   const top = ranked.slice(0, 5);
@@ -814,12 +806,22 @@ function scoreAiCitability(
   let score = discovery.auditedPage.citability.page_score;
 
   if (liveRetrievalFullyBlocked(discovery)) {
-    score = Math.min(score, 30);
-    collect?.push({
-      id: 'live_retrieval_blocked',
-      component: 'ai_citability_visibility',
-      cap: 30,
-    });
+    score = applyCap(
+      score,
+      { id: 'live_retrieval_blocked', component: 'ai_citability_visibility', cap: 30 },
+      collect,
+    );
+  }
+
+  // AI crawlers (GPTBot, ClaudeBot, PerplexityBot) do not run JavaScript, so
+  // a shell page stays capped even when a browser render would show content.
+
+  if (discovery.auditedPage.jsRenderingRisk.isLikelyCsr) {
+    score = applyCap(
+      score,
+      { id: 'csr_only_rendering', component: 'ai_citability_visibility', cap: 40 },
+      collect,
+    );
   }
 
   return { score: clamp(score), evidence: 'inferred' };
@@ -847,10 +849,8 @@ function answerFormatScore(discovery: DiscoveryResult): number {
 }
 
 function entitySignalScore(discovery: DiscoveryResult): number {
-  const sd = discovery.auditedPage.structuredData;
-
   return (
-    (sd.blocks.some((b) => b.sameAs.length > 0) ? 50 : 0) +
+    (hasSameAsLinks(discovery.auditedPage.structuredData) ? 50 : 0) +
     (discovery.platform_signals.has_author ? 25 : 0) +
     (discovery.platform_signals.visible_dates ? 25 : 0)
   );
@@ -891,45 +891,55 @@ export function computeAuditScores(
     structured_data: structured,
     platform_optimization: scorePlatform(discovery),
   };
-  const breakdown: ScoreBreakdownItem[] = (Object.keys(COMPONENT_WEIGHT) as ScoreComponentId[]).map(
-    (component) => {
-      const weight = COMPONENT_WEIGHT[component];
-      const evidence = raw[component].evidence;
-      const rawScore = raw[component].score;
-      const score = rawScore === null ? null : applyEvidenceCeiling(clamp(rawScore), evidence);
-
-      return {
-        component,
-        display_name: COMPONENT_LABEL[component],
-        score,
-        weight,
-        weighted: score === null ? null : Math.round(score * weight),
-        evidence_type: evidence,
-      };
-    },
-  );
-
+  const breakdown = scoreBreakdown(raw);
   const overallRaw = weightedAverage(breakdown.map((b) => ({ value: b.score, weight: b.weight })));
   const overall = overallRaw === null ? 0 : clamp(overallRaw);
-
-  const evidences = breakdown.filter((b) => b.score !== null).map((b) => b.evidence_type);
-  const hasDirect = evidences.some((e) => e === 'direct' || e === 'mixed');
-  const evidence_quality: EvidenceType = hasDirect ? 'mixed' : 'inferred';
-
-  const availableCount = breakdown.filter((b) => b.score !== null).length;
-  const cruxPresent = (discovery.crux.results ?? []).length > 0;
-  // Search Console is not collected, so confidence never reaches high.
-  // One missing component still counts as medium when CrUX is present.
-  const confidence: ScoreConfidence =
-    availableCount >= breakdown.length - 1 && cruxPresent ? 'medium' : 'low';
 
   return {
     overall,
     label: scoreLabel(overall) ?? 'Needs Attention',
-    confidence,
-    evidence_quality,
+    confidence: scoreConfidence(breakdown, discovery),
+    evidence_quality: evidenceQualityOf(breakdown),
     breakdown,
   };
+}
+
+function scoreBreakdown(raw: Record<ScoreComponentId, ComponentResult>): ScoreBreakdownItem[] {
+  return (Object.keys(COMPONENT_WEIGHT) as ScoreComponentId[]).map((component) => {
+    const weight = COMPONENT_WEIGHT[component];
+    const evidence = raw[component].evidence;
+    const rawScore = raw[component].score;
+    const score = rawScore === null ? null : applyEvidenceCeiling(clamp(rawScore), evidence);
+
+    return {
+      component,
+      display_name: COMPONENT_LABEL[component],
+      score,
+      weight,
+      weighted: score === null ? null : Math.round(score * weight),
+      evidence_type: evidence,
+    };
+  });
+}
+
+/** `mixed` when any scored component has direct or mixed evidence, else `inferred`. */
+function evidenceQualityOf(breakdown: ScoreBreakdownItem[]): EvidenceType {
+  const evidences = breakdown.filter((b) => b.score !== null).map((b) => b.evidence_type);
+
+  return evidences.some((e) => e === 'direct' || e === 'mixed') ? 'mixed' : 'inferred';
+}
+
+function scoreConfidence(
+  breakdown: ScoreBreakdownItem[],
+  discovery: DiscoveryResult,
+): ScoreConfidence {
+  const availableCount = breakdown.filter((b) => b.score !== null).length;
+  const cruxPresent = (discovery.crux.results ?? []).length > 0;
+
+  // Search Console is not collected, so confidence never reaches high.
+  // One missing component still counts as medium when CrUX is present.
+
+  return availableCount >= breakdown.length - 1 && cruxPresent ? 'medium' : 'low';
 }
 
 export function scoreForKind(kind: ReportKind, scores: AuditScores): KindScore {

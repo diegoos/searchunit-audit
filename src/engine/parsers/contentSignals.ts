@@ -28,6 +28,7 @@ export const STATISTIC_SNIPPET_GLOBAL_RE = new RegExp(STATISTIC_SNIPPET_SOURCE, 
 /** FAQ heading words in EN/PT/ES/FR. "perguntas" also covers "perguntas frequentes". */
 const FAQ_HEADING_RE =
   /faq|perguntas|preguntas frecuentes|frequently asked|questions fr[ée]quentes/i;
+const DEFINITION_HEADING_RE = /o que é|what is|definição/i;
 
 /**
  * A question opener is a wh-word or auxiliary followed by a question form, or a
@@ -41,13 +42,12 @@ function isQuestionHeading(text: string): boolean {
   return text.includes('?') || QUESTION_OPENER_RE.test(text);
 }
 
-/** Counts h2/h3 headings phrased as questions (heuristic across EN/PT). */
-function countQuestionHeadings($: cheerio.CheerioAPI): number {
-  return $('h2, h3').filter((_, el) => isQuestionHeading($(el).text().trim())).length;
+/** Counts h2/h3 headings whose trimmed text satisfies `matches`. */
+function countHeadings($: cheerio.CheerioAPI, matches: (text: string) => boolean): number {
+  return $('h2, h3').filter((_, el) => matches($(el).text().trim())).length;
 }
 
 /** Counts paragraphs/list items carrying numeric statistics (percentages, currency, years, units). */
-
 function countStatisticSnippets($: cheerio.CheerioAPI): number {
   let count = 0;
 
@@ -111,14 +111,12 @@ export function extractContentSignals($: cheerio.CheerioAPI, paragraphs: string[
   const hasTopSummary = openingWords >= 8 && openingWords <= 80 && /^[^.!?]+[.!?]/.test(summary);
   // A FAQ heading alone is not enough: the section must hold a question heading.
   // A FAQPage microdata block counts as visible markup.
-  const questionHeadingCount = countQuestionHeadings($);
+  const questionHeadingCount = countHeadings($, isQuestionHeading);
   const hasFaqPattern =
     $('[itemtype*="FAQPage"]').length > 0 ||
-    ($('h2, h3').filter((_, el) => FAQ_HEADING_RE.test($(el).text())).length > 0 &&
-      questionHeadingCount > 0);
+    (countHeadings($, (text) => FAQ_HEADING_RE.test(text)) > 0 && questionHeadingCount > 0);
   const hasDefinitionPattern =
-    $('dl').length > 0 ||
-    $('h2, h3').filter((_, el) => /o que é|what is|definição/i.test($(el).text())).length > 0;
+    $('dl').length > 0 || countHeadings($, (text) => DEFINITION_HEADING_RE.test(text)) > 0;
 
   const articleCards = $('article, [class*="card"], .post, .entry').length;
   const listingPattern = articleCards >= 4 || $('main a[href]').length >= 15;

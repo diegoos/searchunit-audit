@@ -1,5 +1,6 @@
 import type { CitabilitySummary } from './citabilityBlocks.ts';
 import type { StructuredDataSummary } from './htmlParser.ts';
+import type { HttpsReadiness } from './httpsReadiness.ts';
 import type { ExternalResources } from './parsers/externalResources.ts';
 import type { ImageSignals, VideoSignal } from './parsers/imageDiscover.ts';
 import type { PageKind, SiteType } from './pageClassification.ts';
@@ -220,6 +221,8 @@ export interface AuditedPageSnapshot {
   /** Up to 5 main content tables, each up to 30 rows of up to 10 cell texts (200 characters each). */
   tables: string[][][];
   mixedContent: MixedContent;
+  /** Scripts and stylesheets on the audited host, up to 30. */
+  sameHostResources: string[];
   hiddenText: HiddenText;
   /** `<meta charset>` or http-equiv charset, lowercase. */
   charset: string | null;
@@ -296,6 +299,37 @@ export interface AuditedPageSnapshot {
   siteType: SiteType;
 }
 
+export type RenderReason = 'not-requested' | 'chrome-missing' | 'timeout' | 'too_large' | 'error';
+
+/**
+ * Chrome-rendered DOM of the audited URL, run through the same parser as the raw
+ * HTML. Content fields are null unless `status` is `ok`.
+ */
+export interface RenderedPage {
+  status: 'ok' | 'skipped' | 'error';
+  reason: RenderReason | null;
+  title: string | null;
+  metaDescription: string | null;
+  canonicalUrl: string | null;
+  effectiveRobotsDirective: string | null;
+  h1: string[] | null;
+  wordCount: number | null;
+  /** Main content text, cut at 20000 characters. */
+  mainText: string | null;
+  /** True when the render held more text than `mainText` keeps. Null unless `ok`. */
+  mainTextTruncated: boolean | null;
+  structuredDataTypes: string[] | null;
+  internalLinkCount: number | null;
+  hreflang: string[] | null;
+  visibleTextSha256: string | null;
+  /** Install command or phrase for a missing Chrome. Null otherwise. */
+  install: string | null;
+  /** Rendered internal-link pageKeys missing from the raw index, up to 20. Null unless `ok`. */
+  linksOnlyAfterRender: string[] | null;
+  /** All such pageKeys, not capped. Null unless `ok`. */
+  linksOnlyAfterRenderCount: number | null;
+}
+
 export interface PlatformSignals {
   question_heading_count: number;
   faq_pattern: boolean;
@@ -343,10 +377,14 @@ export interface DiscoveryResult {
   platform_signals: PlatformSignals;
   auditedPage: AuditedPageSnapshot;
   mobilePage: MobilePageSnapshot | null;
-  /** Why `mobilePage` is null (fetch error code or `http_<status>`), else null. */
+  /** Why `mobilePage` is null (a fetch error code; an HTTP error status still returns a page), else null. */
   mobileFetchError: string | null;
   /** Status probe of links on the audited page. Only `audit` runs it. */
   linkStatus: LinkStatusReport;
+  /** HTTPS production readiness of a loopback page. Null for any other URL. */
+  httpsReadiness: HttpsReadiness | null;
+  /** Chrome render of the audited URL. `not-requested` outside `audit` with a lab trigger. */
+  renderedPage: RenderedPage;
   pagesSampled: number;
 }
 

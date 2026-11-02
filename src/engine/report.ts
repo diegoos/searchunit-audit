@@ -9,11 +9,10 @@ import {
 } from './scoring.ts';
 
 import {
+  BLOCKERS_BY_KIND,
   collectFindings,
   filterFindingsForKind,
-  GEO_BLOCKERS,
   kindExtras,
-  SEO_BLOCKERS,
   type KindReportKind,
 } from './findings.ts';
 import { cruxApiKeyAvailable } from '../lib/config.ts';
@@ -88,23 +87,20 @@ export function discoveryForReport(bundle: DiscoveryBundle): DiscoveryResult {
     mobilePage: bundle.mobilePage,
     mobileFetchError: bundle.mobileFetchError,
     linkStatus: bundle.linkStatus,
+    httpsReadiness: bundle.httpsReadiness,
+    renderedPage: bundle.renderedPage,
     pagesSampled: bundle.pagesSampled,
   };
 }
 
+/** Kind reports drop the sitemap URL list and llms.txt links to keep the payload small. */
 function discoveryForKindReport(bundle: DiscoveryBundle): DiscoveryResult {
   const discovery = discoveryForReport(bundle);
 
   return {
     ...discovery,
-    sitemap: {
-      ...discovery.sitemap,
-      urls: [],
-    },
-    llmsTxt: {
-      ...discovery.llmsTxt,
-      links: [],
-    },
+    sitemap: { ...discovery.sitemap, urls: [] },
+    llmsTxt: { ...discovery.llmsTxt, links: [] },
   };
 }
 
@@ -117,11 +113,6 @@ function scoresFromKind(full: AuditScores, kind: KindScore): AuditScores {
     breakdown: kind.breakdown,
   };
 }
-
-const KIND_BLOCKERS: Record<KindReportKind, ReadonlySet<CriticalBlocker['id']>> = {
-  seo: SEO_BLOCKERS,
-  geo: GEO_BLOCKERS,
-};
 
 function scoreBundle(bundle: DiscoveryBundle): {
   blockers: CriticalBlocker[];
@@ -149,7 +140,7 @@ function kindReportBody(input: {
     command,
     kind,
     scores: scoresFromKind(scores, kindScore),
-    blockers: blockers.filter((blocker) => KIND_BLOCKERS[kind].has(blocker.id)),
+    blockers: blockers.filter((blocker) => BLOCKERS_BY_KIND[kind].has(blocker.id)),
     findings: [...filterFindingsForKind(kind, collected), ...extras],
   };
 }

@@ -14,13 +14,18 @@ import { parseLlmsTxt } from '../tools/llmstxt/parseLlmsTxt.ts';
 import { analyzeSecurityHeaders } from '../tools/security/analyzeSecurityHeaders.ts';
 import { buildAnalyzeContext } from '../tools/security/buildAnalyzeContext.ts';
 import { parseSecurityHeaders } from '../tools/security/parseSecurityHeaders.ts';
-import { AI_CRAWLERS } from '../tools/robots/aiCrawlers';
+import { AI_CRAWLERS } from '../tools/robots/aiCrawlers.ts';
 import type { DiscoveryBundle } from './discovery.ts';
 import { CITABILITY_IDEAL_MAX_WORDS, CITABILITY_IDEAL_MIN_WORDS } from './citabilityBlocks.ts';
-import { isLocalTarget, LIVE_RETRIEVAL_BOTS, type CriticalBlocker } from './scoring.ts';
+import { LIVE_RETRIEVAL_BOTS, type CriticalBlocker } from './scoring.ts';
+import { isLocalTarget } from './localTarget.ts';
+import { promptInjectionFinding } from './promptInjection.ts';
+import { renderFinding } from './renderFindings.ts';
 import type { ExternalResources } from './parsers/externalResources.ts';
 import type { Finding, FindingSeverity, ReportKind } from './types.ts';
 import {
+  blockedResourcesFinding,
+  makeFinding,
   mobileParityFinding,
   pageContentFindings,
   pageLinkFindings,
@@ -50,34 +55,12 @@ function fromCheck(
   source: string,
   check: { id: string; label: string; status: FindingSeverity; detail: string },
 ): Finding {
-  return {
-    id: `${source}:${check.id}`,
-    source,
-    severity: check.status,
-    title: check.label,
-    detail: check.detail,
-  };
+  return makeFinding(source, check.id, check.status, check.label, check.detail);
 }
-
-/** Maps a discovery fact onto a finding with the `discovery:` id prefix. */
 
 /** Status plus the error code of a failed fetch, when there is one. */
 function withFetchError(status: string, error: string | null): string {
   return error ? `${status} (${error} after retries)` : status;
-}
-
-/** Loopback targets skip the HTTPS judgment. The report says so instead of staying silent. */
-function httpsFinding(bundle: DiscoveryBundle): Finding {
-  const local = isLocalTarget(bundle.auditedPage.url);
-
-  return discoveryFinding(
-    'https',
-    'info',
-    'HTTPS',
-    local
-      ? 'local URL (loopback): HTTPS not judged, no_https not applied'
-      : 'checked on the audited URL',
-  );
 }
 
 function discoveryFinding(
@@ -86,7 +69,61 @@ function discoveryFinding(
   title: string,
   detail: string,
 ): Finding {
-  return { id: `discovery:${id}`, source: 'discovery', severity, title, detail };
+  return makeFinding('discovery', id, severity, title, detail);
+}
+
+/**
+ * Loopback targets get the readiness check for the HTTPS production URL. Other
+ * URLs keep the plain note: their HTTPS state is already in the blockers.
+ */
+function httpsFinding(bundle: DiscoveryBundle): Finding {
+  const readiness = bundle.httpsReadiness;
+
+  if (readiness === null) {
+    return discoveryFinding('https', 'info', 'HTTPS', 'checked on the audited URL');
+  }
+
+  const { activeCount, passiveCount } = bundle.auditedPage.mixedContent;
+  const parts = [
+    readiness.insecureSubresources.length > 0
+      ? `http subresources (${activeCount} active, ${passiveCount} passive): ${readiness.insecureSubresources.join(', ')}`
+      : null,
+    readiness.insecureUrls.length > 0
+      ? `http URLs on other hosts: ${fieldUrls(readiness.insecureUrls)}`
+      : null,
+    readiness.devHostUrls.length > 0
+      ? `dev-host URLs (check the SITE_URL build config): ${fieldUrls(readiness.devHostUrls)}`
+      : null,
+  ].filter((part): part is string => part !== null);
+
+  if (parts.length === 0) {
+    return discoveryFinding('https', 'pass', 'HTTPS', 'loopback URL: no HTTPS readiness issue');
+  }
+
+  return discoveryFinding(
+    'https',
+    httpsReadinessSeverity(bundle, readiness),
+    'HTTPS',
+    `loopback URL: ${parts.join('; ')}`,
+  );
+}
+
+function fieldUrls(items: readonly { field: string; url: string }[]): string {
+  return items.map((item) => `${item.field} ${item.url}`).join(', ');
+}
+
+/** `warn` for an active subresource or an http URL on another host; `info` for the rest. */
+function httpsReadinessSeverity(
+  bundle: DiscoveryBundle,
+  readiness: NonNullable<DiscoveryBundle['httpsReadiness']>,
+): FindingSeverity {
+  const { activeCount } = bundle.auditedPage.mixedContent;
+
+  if (activeCount > 0 || readiness.insecureUrls.length > 0) {
+    return 'warn';
+  }
+
+  return 'info';
 }
 
 function robotsAnalysisForBundle(bundle: DiscoveryBundle) {
@@ -173,6 +210,9 @@ function externalOriginSummary(resources: ExternalResources): string {
   return `external origins: ${origins}; inline scripts ${resources.inlineScripts}; inline styles ${resources.inlineStyles}`;
 }
 
+/** Browsers ignore HSTS received over http:, so a loopback URL cannot be judged on it. */
+const HSTS_CHECK_ID = 'strict-transport-security';
+
 function securityFindings(bundle: DiscoveryBundle): Finding[] {
   const headers = parseSecurityHeaders(bundle.pageHeaders);
   const ctx = buildAnalyzeContext({
@@ -180,8 +220,19 @@ function securityFindings(bundle: DiscoveryBundle): Finding[] {
     status: bundle.auditedPage.statusCode,
   });
   const originSummary = externalOriginSummary(bundle.auditedPage.externalResources);
+  const loopback = isLocalTarget(bundle.auditedUrl);
 
   return analyzeSecurityHeaders(headers, ctx).checks.map((check) => {
+    if (loopback && check.id === HSTS_CHECK_ID) {
+      return {
+        id: `security:${check.id}`,
+        source: 'security-headers',
+        severity: 'info',
+        title: check.label,
+        detail: 'not judged on a loopback URL',
+      };
+    }
+
     const detail = check.value?.trim() || check.detail?.trim() || 'missing';
     const withOrigins =
       check.id === 'content-security-policy' && !headers.csp
@@ -221,35 +272,28 @@ function sitemapFinding(sitemap: DiscoveryBundle['sitemap']): Finding {
   );
 }
 
-/**
- * Builds findings from critical blockers, discovery facts, and tool analyzers.
- */
-export function collectFindings(
-  bundle: DiscoveryBundle,
-  blockers: readonly CriticalBlocker[],
-): Finding[] {
-  const findings: Finding[] = [];
-
-  for (const blocker of blockers) {
-    findings.push({
-      id: `blocker:${blocker.id}`,
-      source: 'critical-blocker',
-      severity: 'fail',
-      title: BLOCKER_TITLE[blocker.id],
-      detail: `Caps ${blocker.component} at ${blocker.cap}`,
-    });
+function llmsSeverityOf(llmsTxt: DiscoveryBundle['llmsTxt']): FindingSeverity {
+  if (llmsTxt.exists) {
+    return 'pass';
   }
 
+  return llmsTxt.fetchStatus === 'error' ? 'warn' : 'info';
+}
+
+function blockerFindings(blockers: readonly CriticalBlocker[]): Finding[] {
+  return blockers.map((blocker): Finding => ({
+    id: `blocker:${blocker.id}`,
+    source: 'critical-blocker',
+    severity: 'fail',
+    title: BLOCKER_TITLE[blocker.id],
+    detail: `Caps ${blocker.component} at ${blocker.cap}`,
+  }));
+}
+
+function discoveryFindings(bundle: DiscoveryBundle): Finding[] {
   const p = bundle.auditedPage;
-  let llmsSeverity: FindingSeverity = 'info';
 
-  if (bundle.llmsTxt.exists) {
-    llmsSeverity = 'pass';
-  } else if (bundle.llmsTxt.fetchStatus === 'error') {
-    llmsSeverity = 'warn';
-  }
-
-  findings.push(
+  return [
     discoveryFinding(
       'page-class',
       'info',
@@ -265,7 +309,7 @@ export function collectFindings(
     sitemapFinding(bundle.sitemap),
     discoveryFinding(
       'llms',
-      llmsSeverity,
+      llmsSeverityOf(bundle.llmsTxt),
       'llms.txt status',
       withFetchError(bundle.llms_txt_status, bundle.llmsTxt.fetchError),
     ),
@@ -286,51 +330,61 @@ export function collectFindings(
     ),
     searchCrawlerFinding(bundle),
     mobileParityFinding(bundle),
+    renderFinding(bundle),
+  ];
+}
+
+function schemaFindings(bundle: DiscoveryBundle): Finding[] {
+  const { blocks } = analyzeSchema(bundle.schemaBlocks);
+
+  if (blocks.length === 0) {
+    return [makeFinding('schema', 'jsonld', 'fail', 'JSON-LD', 'no application/ld+json blocks')];
+  }
+
+  return blocks.flatMap((block) =>
+    block.checks.map((check) => fromCheck(`schema:${block.index}`, check)),
   );
+}
 
-  const schema = analyzeSchema(bundle.schemaBlocks);
+function metaFindings(bundle: DiscoveryBundle): Finding[] {
+  return analyzeMeta(bundle.metaTags, bundle.auditedUrl).checks.map((check) =>
+    fromCheck('meta', check),
+  );
+}
 
-  for (const block of schema.blocks) {
-    for (const check of block.checks) {
-      findings.push(fromCheck(`schema:${block.index}`, check));
-    }
-  }
+function robotsFindings(bundle: DiscoveryBundle): Finding[] {
+  return [
+    ...robotsAnalysisForBundle(bundle).checks.map((check) => fromCheck('robots', check)),
+    blockedResourcesFinding(bundle),
+  ];
+}
 
-  if (schema.blocks.length === 0) {
-    findings.push({
-      id: 'schema:jsonld',
-      source: 'schema',
-      severity: 'fail',
-      title: 'JSON-LD',
-      detail: 'no application/ld+json blocks',
-    });
-  }
+function llmsFindings(bundle: DiscoveryBundle): Finding[] {
+  const analysis = llmsAnalysisForBundle(bundle);
 
-  const meta = analyzeMeta(bundle.metaTags, bundle.auditedUrl);
+  return [
+    ...analysis.checks.map((check) => fromCheck('llms', check)),
+    ...analysis.llmsFullChecks.map((check) => fromCheck('llms-full', check)),
+  ];
+}
 
-  for (const check of meta.checks) {
-    findings.push(fromCheck('meta', check));
-  }
-
-  findings.push(...pageMetaFindings(bundle));
-
-  for (const check of robotsAnalysisForBundle(bundle).checks) {
-    findings.push(fromCheck('robots', check));
-  }
-
-  const llmsAnalysis = llmsAnalysisForBundle(bundle);
-
-  for (const check of llmsAnalysis.checks) {
-    findings.push(fromCheck('llms', check));
-  }
-
-  for (const check of llmsAnalysis.llmsFullChecks) {
-    findings.push(fromCheck('llms-full', check));
-  }
-
-  findings.push(...securityFindings(bundle));
-
-  return findings;
+/**
+ * Builds findings from critical blockers, discovery facts, and tool analyzers.
+ */
+export function collectFindings(
+  bundle: DiscoveryBundle,
+  blockers: readonly CriticalBlocker[],
+): Finding[] {
+  return [
+    ...blockerFindings(blockers),
+    ...discoveryFindings(bundle),
+    ...schemaFindings(bundle),
+    ...metaFindings(bundle),
+    ...pageMetaFindings(bundle),
+    ...robotsFindings(bundle),
+    ...llmsFindings(bundle),
+    ...securityFindings(bundle),
+  ];
 }
 
 /** Worst finding severity, treating info as pass. */
@@ -369,13 +423,15 @@ export const SEO_BLOCKERS = new Set<CriticalBlocker['id']>([
   'noindex_or_error',
   'no_https',
   'poor_core_web_vitals',
-  'csr_only_rendering',
   'oversized_html',
   'thin_content',
   'no_structured_data',
 ]);
 
-export const GEO_BLOCKERS = new Set<CriticalBlocker['id']>(['live_retrieval_blocked']);
+export const GEO_BLOCKERS = new Set<CriticalBlocker['id']>([
+  'live_retrieval_blocked',
+  'csr_only_rendering',
+]);
 
 const SEO_DISCOVERY = new Set([
   'page-class',
@@ -385,6 +441,7 @@ const SEO_DISCOVERY = new Set([
   'redirects',
   'search-crawlers',
   'mobile',
+  'render',
 ]);
 const GEO_DISCOVERY = new Set(['page-class', 'llms']);
 
@@ -393,25 +450,28 @@ const DISCOVERY_BY_KIND: Record<KindReportKind, ReadonlySet<string>> = {
   geo: GEO_DISCOVERY,
 };
 
-const BLOCKERS_BY_KIND: Record<KindReportKind, ReadonlySet<CriticalBlocker['id']>> = {
+export const BLOCKERS_BY_KIND: Record<KindReportKind, ReadonlySet<CriticalBlocker['id']>> = {
   seo: SEO_BLOCKERS,
   geo: GEO_BLOCKERS,
 };
 
-function discoveryKey(finding: Finding): string | undefined {
-  if (finding.source !== 'discovery' || !finding.id.startsWith('discovery:')) {
+/** The id text after `prefix`, when the finding came from `source` with that prefix. */
+function idAfterPrefix(finding: Finding, source: string, prefix: string): string | undefined {
+  if (finding.source !== source || !finding.id.startsWith(prefix)) {
     return undefined;
   }
 
-  return finding.id.slice('discovery:'.length);
+  return finding.id.slice(prefix.length);
+}
+
+function discoveryKey(finding: Finding): string | undefined {
+  return idAfterPrefix(finding, 'discovery', 'discovery:');
 }
 
 function blockerId(finding: Finding): CriticalBlocker['id'] | undefined {
-  if (finding.source !== 'critical-blocker' || !finding.id.startsWith('blocker:')) {
-    return undefined;
-  }
-
-  return finding.id.slice('blocker:'.length) as CriticalBlocker['id'];
+  return idAfterPrefix(finding, 'critical-blocker', 'blocker:') as
+    | CriticalBlocker['id']
+    | undefined;
 }
 
 function isSchemaSource(source: string): boolean {
@@ -451,101 +511,98 @@ export function filterFindingsForKind(
   return findings.filter((finding) => findingBelongsToKind(kind, finding));
 }
 
-function extraFinding(
-  source: string,
-  id: string,
-  severity: FindingSeverity,
-  title: string,
-  detail: string,
-): Finding {
-  return { id: `${source}:${id}`, source, severity, title, detail };
-}
-
-function seoContentExtras(bundle: DiscoveryBundle): Finding[] {
-  const page = bundle.auditedPage;
-  const { h1Count, h1ElementCount } = page.headings;
-  let h1: Finding;
-
+function h1Finding({
+  h1Count,
+  h1ElementCount,
+}: DiscoveryBundle['auditedPage']['headings']): Finding {
   if (h1Count === 1) {
-    h1 = extraFinding('content', 'h1', 'pass', 'H1', 'one H1');
-  } else if (h1ElementCount > 0 && h1Count === 0) {
-    h1 = extraFinding('content', 'h1', 'warn', 'H1', 'H1 element with no text');
-  } else if (h1Count === 0) {
-    h1 = extraFinding('content', 'h1', 'fail', 'H1', 'missing');
-  } else {
-    h1 = extraFinding('content', 'h1', 'warn', 'H1', `${h1Count} H1 elements`);
+    return makeFinding('content', 'h1', 'pass', 'H1', 'one H1');
   }
 
-  const { total, missingAlt, decorative } = page.images;
-  let images: Finding;
+  if (h1ElementCount > 0 && h1Count === 0) {
+    return makeFinding('content', 'h1', 'warn', 'H1', 'H1 element with no text');
+  }
 
+  if (h1Count === 0) {
+    return makeFinding('content', 'h1', 'fail', 'H1', 'missing');
+  }
+
+  return makeFinding('content', 'h1', 'warn', 'H1', `${h1Count} H1 elements`);
+}
+
+function imageAltFinding({
+  total,
+  missingAlt,
+  decorative,
+}: DiscoveryBundle['auditedPage']['images']): Finding {
   if (total === 0) {
-    images = extraFinding('content', 'image-alt', 'info', 'Image alt', 'no images');
-  } else if (missingAlt === 0) {
-    images = extraFinding(
+    return makeFinding('content', 'image-alt', 'info', 'Image alt', 'no images');
+  }
+
+  if (missingAlt === 0) {
+    return makeFinding(
       'content',
       'image-alt',
       'pass',
       'Image alt',
       `all have alt (${decorative} decorative)`,
     );
-  } else {
-    images = extraFinding(
-      'content',
-      'image-alt',
-      'warn',
-      'Image alt',
-      `${missingAlt}/${total} missing alt (${decorative} decorative)`,
-    );
   }
 
-  const author = page.author.hasAuthor
-    ? extraFinding('content', 'author', 'pass', 'Author', page.author.names.join(', ') || 'present')
-    : extraFinding('content', 'author', 'warn', 'Author', 'missing');
-  const { published, modified } = page.dates;
-  let dates: Finding;
+  return makeFinding(
+    'content',
+    'image-alt',
+    'warn',
+    'Image alt',
+    `${missingAlt}/${total} missing alt (${decorative} decorative)`,
+  );
+}
 
+function datesFinding({ published, modified }: DiscoveryBundle['auditedPage']['dates']): Finding {
   if (published && modified) {
-    dates = extraFinding(
+    return makeFinding(
       'content',
       'dates',
       'pass',
       'Dates',
       `published=${published} modified=${modified}`,
     );
-  } else if (published || modified) {
-    dates = extraFinding(
+  }
+
+  if (published || modified) {
+    return makeFinding(
       'content',
       'dates',
       'warn',
       'Dates',
       `published=${published ?? 'missing'} modified=${modified ?? 'missing'}`,
     );
-  } else {
-    dates = extraFinding(
-      'content',
-      'dates',
-      'warn',
-      'Dates',
-      'missing datePublished and dateModified',
-    );
   }
 
-  return [h1, images, author, dates];
+  return makeFinding('content', 'dates', 'warn', 'Dates', 'missing datePublished and dateModified');
+}
+
+function seoContentExtras(bundle: DiscoveryBundle): Finding[] {
+  const page = bundle.auditedPage;
+  const author = page.author.hasAuthor
+    ? makeFinding('content', 'author', 'pass', 'Author', page.author.names.join(', ') || 'present')
+    : makeFinding('content', 'author', 'warn', 'Author', 'missing');
+
+  return [h1Finding(page.headings), imageAltFinding(page.images), author, datesFinding(page.dates)];
 }
 
 function seoDiscoverExtras(bundle: DiscoveryBundle): Finding[] {
   const { maxImagePreviewLarge, hasRepresentativeImage } = bundle.auditedPage.discover;
 
   return [
-    extraFinding(
+    makeFinding(
       'discover',
       'max-image-preview',
       maxImagePreviewLarge ? 'pass' : 'warn',
       'max-image-preview',
       maxImagePreviewLarge ? 'large' : 'not large',
     ),
-    extraFinding(
+    makeFinding(
       'discover',
       'representative-image',
       hasRepresentativeImage ? 'pass' : 'warn',
@@ -571,21 +628,21 @@ function geoCitabilityExtras(bundle: DiscoveryBundle): Finding[] {
   const citability = bundle.auditedPage.citability;
 
   return [
-    extraFinding(
+    makeFinding(
       'citability',
       'page-score',
       citabilitySeverity(citability.page_score),
       'Page citability',
       String(citability.page_score),
     ),
-    extraFinding(
+    makeFinding(
       'citability',
       'citation-ready',
       citability.citation_ready_blocks > 0 ? 'pass' : 'warn',
       'Citation-ready blocks',
       String(citability.citation_ready_blocks),
     ),
-    extraFinding(
+    makeFinding(
       'citability',
       'ideal-range',
       citability.ideal_range_blocks > 0 ? 'pass' : 'info',
@@ -613,7 +670,7 @@ function crawlerSeverity(status: string): FindingSeverity {
 
 function geoCrawlerExtras(bundle: DiscoveryBundle): Finding[] {
   return bundle.crawlerAccess.crawlers.map((entry) =>
-    extraFinding(
+    makeFinding(
       'crawlers',
       entry.bot,
       crawlerSeverity(entry.status),
@@ -628,42 +685,42 @@ function geoPlatformExtras(bundle: DiscoveryBundle): Finding[] {
   const content = bundle.auditedPage.contentSignals;
 
   return [
-    extraFinding(
+    makeFinding(
       'platform',
       'faq',
       signals.faq_pattern ? 'pass' : 'info',
       'FAQ pattern',
       signals.faq_pattern ? 'present (inferred)' : 'absent (inferred)',
     ),
-    extraFinding(
+    makeFinding(
       'platform',
       'definition',
       content.hasDefinitionPattern ? 'pass' : 'info',
       'Definition pattern',
       content.hasDefinitionPattern ? 'present (inferred)' : 'absent (inferred)',
     ),
-    extraFinding(
+    makeFinding(
       'platform',
       'question-headings',
       signals.question_heading_count > 0 ? 'pass' : 'info',
       'Question headings',
       `${signals.question_heading_count} (inferred)`,
     ),
-    extraFinding(
+    makeFinding(
       'platform',
       'tables',
       signals.table_count > 0 ? 'pass' : 'info',
       'Tables',
       `${signals.table_count} (inferred)`,
     ),
-    extraFinding(
+    makeFinding(
       'platform',
       'stats',
       signals.statistic_snippet_count > 0 ? 'pass' : 'info',
       'Statistic snippets',
       `${signals.statistic_snippet_count} (inferred)`,
     ),
-    extraFinding(
+    makeFinding(
       'speakable',
       'jsonld',
       bundle.auditedPage.hasSpeakable ? 'pass' : 'info',
@@ -679,6 +736,7 @@ export function kindExtras(kind: KindReportKind, bundle: DiscoveryBundle): Findi
     return [
       ...seoContentExtras(bundle),
       ...pageContentFindings(bundle),
+      promptInjectionFinding(bundle),
       ...pageLinkFindings(bundle),
       ...seoDiscoverExtras(bundle),
     ];

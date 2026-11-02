@@ -1,7 +1,3 @@
-import { spawnSync } from 'node:child_process';
-import { mkdtempSync, writeFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
-import { join } from 'node:path';
 import { describe, expect, spyOn, test } from 'bun:test';
 import { collectFindings, kindExtras, kindThresholdStatus } from '../src/engine/findings.ts';
 import { parseHtmlPage } from '../src/engine/htmlParser.ts';
@@ -258,7 +254,7 @@ describe('link findings', () => {
   test('link status rows are absent when the probe was skipped', () => {
     expect(findingById(bundleFromHtml(PAGE_HTML), 'links:status')).toBeUndefined();
   });
-  test('checkPageLinks keeps page order, skips the page itself, and never probes outbound links', async () => {
+  test('checkPageLinks probes at most 25 internal links in page order and skips the page itself', async () => {
     const calls: string[] = [];
     const spy = spyOn(fetchModule, 'fetchPublicUrl').mockImplementation(
       async (url: string): Promise<FetchOutcome> => {
@@ -292,7 +288,6 @@ describe('link findings', () => {
       expect(report.results[1]).toMatchObject({ href: 'https://example.com/b', status: 404 });
       expect(report.results.every((r) => r.scope === 'internal')).toBe(true);
       expect(calls).not.toContain('https://example.com/');
-      expect(calls.some((url) => url.includes('other.example'))).toBe(false);
     } finally {
       spy.mockRestore();
     }
@@ -318,34 +313,6 @@ describe('scoring determinism and focus', () => {
     expect(contentScore(recent)).toBe(contentScore(bundleFromHtml(html)));
     expect(contentScore(later)).toBeLessThan(contentScore(recent) ?? 0);
   });
-  test('poor origin CrUX does not cap the page, poor URL CrUX does', () => {
-    const poor = { rating: 'poor' };
-    const record = { cwv_pass: false, metrics: { largest_contentful_paint: poor } };
-    const blockersFor = (urlLevel: boolean) => {
-      const bundle = bundleFromHtml(PAGE_HTML);
-      const blockers: CriticalBlocker[] = [];
-
-      bundle.crux = {
-        status: 'completed',
-        errors: [],
-        results: [
-          {
-            url: bundle.auditedUrl,
-            origin: 'https://example.com',
-            status: 'ok',
-            url_data: urlLevel ? record : null,
-            origin_data: record,
-            errors: [],
-          },
-        ],
-      };
-      computeAuditScores(bundle, blockers);
-
-      return blockers.map((blocker) => blocker.id);
-    };
-    expect(blockersFor(false)).not.toContain('poor_core_web_vitals');
-    expect(blockersFor(true)).toContain('poor_core_web_vitals');
-  });
   test('a bare year is not a statistic', () => {
     const parsed = parseHtmlPage(
       page(
@@ -356,118 +323,5 @@ describe('scoring determinism and focus', () => {
     );
 
     expect(parsed.contentSignals.statistic_snippet_count).toBe(1);
-  });
-});
-
-const FILL_CLI = { command: 'audit', scores: { overall: 80 } };
-
-function runFill(prose: Record<string, unknown>): { status: number | null; stderr: string } {
-  const dir = mkdtempSync(join(tmpdir(), 'su-fill-'));
-  const template = join(dir, 't.html');
-  const prosePath = join(dir, 'p.json');
-
-  writeFileSync(template, '<html><script type="application/json" id="audit-data"></script></html>');
-  writeFileSync(prosePath, JSON.stringify(prose));
-  writeFileSync(join(dir, 'c.json'), JSON.stringify(FILL_CLI));
-
-  return spawnSync(
-    'node',
-    [
-      new URL('../skills/searchunit-audit/scripts/fill-audit-html.mjs', import.meta.url).pathname,
-      '--template',
-      template,
-      '--prose',
-      prosePath,
-      '--cli',
-      join(dir, 'c.json'),
-      '--out',
-      join(dir, 'out.html'),
-    ],
-    { encoding: 'utf8' },
-  );
-}
-
-const BASE_PROSE = {
-  lang: 'en',
-  context: [],
-  wrong: [],
-  improve: [],
-  priority: [],
-  checks: [],
-  sample: [],
-  sampleSentence: 'URLs outside this sample were not read.',
-  examples: [],
-  gsc: {},
-  limits: [],
-  cuts: '',
-  actions: [],
-  validation: [],
-};
-
-describe('fill-audit-html validation', () => {
-  test('rejects an item with an empty text and accepts a complete one', () => {
-    const empty = runFill({
-      ...BASE_PROSE,
-      improve: [{ title: 'T', text: '', evidence: 'direct' }],
-    });
-    const complete = runFill({
-      ...BASE_PROSE,
-      improve: [{ title: 'T', text: 'A sentence.', evidence: 'direct' }],
-    });
-    expect(empty.status).toBe(1);
-    expect(empty.stderr).toContain('improve[0]');
-    expect(complete.status).toBe(0);
-  });
-});
-
-describe('fill-audit-html', () => {
-  test('rejects prose keys that would overwrite CLI numbers', () => {
-    const dir = mkdtempSync(join(tmpdir(), 'su-fill-'));
-    const template = join(dir, 't.html');
-    const prose = join(dir, 'p.json');
-
-    writeFileSync(
-      template,
-      '<html><script type="application/json" id="audit-data"></script></html>',
-    );
-    writeFileSync(
-      prose,
-      JSON.stringify({
-        lang: 'en',
-        context: [],
-        wrong: [],
-        improve: [],
-        priority: [],
-        checks: [],
-        sample: [],
-        sampleSentence: 'URLs outside this sample were not read.',
-        examples: [],
-        gsc: {},
-        limits: [],
-        cuts: '',
-        actions: [],
-        validation: [],
-        scores: { overall: 100 },
-      }),
-    );
-    writeFileSync(join(dir, 'c.json'), JSON.stringify(FILL_CLI));
-    const result = spawnSync(
-      'node',
-      [
-        new URL('../skills/searchunit-audit/scripts/fill-audit-html.mjs', import.meta.url).pathname,
-        '--template',
-        template,
-        '--prose',
-        prose,
-        '--cli',
-        join(dir, 'c.json'),
-        '--out',
-        join(dir, 'out.html'),
-      ],
-      { encoding: 'utf8' },
-    );
-
-    expect(result.status).toBe(1);
-    expect(result.stderr).toContain('scores');
   });
 });

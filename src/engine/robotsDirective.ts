@@ -1,5 +1,10 @@
 import { hasNoindexDirective, INDEXER_BOTS } from '../tools/meta/robotsTokens.ts';
 
+/** True when a merged robots directive contains noindex or none. */
+export function directiveIsNoindex(directive: string | null): boolean {
+  return /\bnoindex\b|\bnone\b/i.test(directive ?? '');
+}
+
 /** Joins meta robots and X-Robots-Tag tokens. A token repeated in either source appears once, first case kept. */
 export function mergeRobotsDirectives(
   metaRobots: string | null,
@@ -26,6 +31,13 @@ export function mergeRobotsDirectives(
   return unique.length > 0 ? unique.join(', ') : null;
 }
 
+/** True when an indexer bot meta (Googlebot, Bingbot) says noindex. */
+function hasIndexerBotNoindex(metaRobotsByBot: Record<string, string>): boolean {
+  return Object.entries(metaRobotsByBot).some(
+    ([bot, content]) => INDEXER_BOTS.has(bot.toLowerCase()) && hasNoindexDirective(content),
+  );
+}
+
 /** Which source carries `noindex`. Meta wins over the header, then an indexer bot meta. */
 export function noindexSource(
   metaRobots: string | null,
@@ -40,37 +52,18 @@ export function noindexSource(
     return 'header';
   }
 
-  for (const [bot, content] of Object.entries(metaRobotsByBot)) {
-    if (INDEXER_BOTS.has(bot.toLowerCase()) && hasNoindexDirective(content)) {
-      return 'bot';
-    }
-  }
-
-  return null;
+  return hasIndexerBotNoindex(metaRobotsByBot) ? 'bot' : null;
 }
 
 export function isNoindexCombined(
   metaRobots: string | null,
   xRobotsTag: string | null,
-  metaRobotsByBot?: Record<string, string>,
+  metaRobotsByBot: Record<string, string> = {},
 ): boolean {
-  const merged = mergeRobotsDirectives(metaRobots, xRobotsTag);
-
-  if (hasNoindexDirective(merged)) {
-    return true;
-  }
-
-  if (!metaRobotsByBot) {
-    return false;
-  }
-
-  for (const [bot, content] of Object.entries(metaRobotsByBot)) {
-    if (INDEXER_BOTS.has(bot.toLowerCase()) && hasNoindexDirective(content)) {
-      return true;
-    }
-  }
-
-  return false;
+  return (
+    hasNoindexDirective(mergeRobotsDirectives(metaRobots, xRobotsTag)) ||
+    hasIndexerBotNoindex(metaRobotsByBot)
+  );
 }
 
 /** True for 2xx pages that are not noindex (same rule as technical indexability). */

@@ -2,26 +2,19 @@ import { classifyRobotsHttp, fetchPublicUrl, type FetchOutcome } from '../lib/fe
 import { hrefWithoutUserinfo, pageKey } from '../lib/url.ts';
 import type { SitemapParseResult } from './types.ts';
 
+/** `&amp;` is not listed: it decodes to the `&` fallback. */
+const XML_ENTITY_CHARS = new Map([
+  ['&lt;', '<'],
+  ['&gt;', '>'],
+  ['&quot;', '"'],
+  ['&apos;', "'"],
+]);
+
 function decodeXmlEntities(value: string): string {
-  return value.replace(/&(?:amp|lt|gt|quot|apos);/g, (entity) => {
-    if (entity === '&lt;') {
-      return '<';
-    }
-
-    if (entity === '&gt;') {
-      return '>';
-    }
-
-    if (entity === '&quot;') {
-      return '"';
-    }
-
-    if (entity === '&apos;') {
-      return "'";
-    }
-
-    return '&';
-  });
+  return value.replace(
+    /&(?:amp|lt|gt|quot|apos);/g,
+    (entity) => XML_ENTITY_CHARS.get(entity) ?? '&',
+  );
 }
 
 function locInnerText(inner: string): string {
@@ -358,10 +351,10 @@ export function resolveSitemapChildUrl(loc: string, sitemapUrl: string): string 
 }
 
 /** Most declared sitemap roots read per audit (robots `Sitemap:` lines, then HTML hints). */
-export const SITEMAP_ROOT_CAP = 5;
+const SITEMAP_ROOT_CAP = 5;
 
 /** Most sitemap files (roots, index children, nested indexes) fetched per audit. */
-export const SITEMAP_FILE_CAP = 25;
+const SITEMAP_FILE_CAP = 25;
 
 /**
  * Sitemap files fetched at once. Many hosts serve sitemaps one at a time; 25

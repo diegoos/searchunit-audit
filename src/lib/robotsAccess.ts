@@ -101,26 +101,27 @@ export function resolveRobotsAccess(
   disallow: readonly string[],
   requestPath: string,
 ): RobotsAccess {
-  let bestAllow: string | null = null;
-  let bestDisallow: string | null = null;
-
-  for (const p of allow) {
-    if (robotsPathMatches(p, requestPath) && (!bestAllow || p.length > bestAllow.length)) {
-      bestAllow = p;
-    }
-  }
-
-  for (const p of disallow) {
-    if (robotsPathMatches(p, requestPath) && (!bestDisallow || p.length > bestDisallow.length)) {
-      bestDisallow = p;
-    }
-  }
+  const bestAllow = longestMatchingRule(allow, requestPath);
+  const bestDisallow = longestMatchingRule(disallow, requestPath);
 
   if (bestDisallow && (!bestAllow || bestDisallow.length > bestAllow.length)) {
     return isSiteWideDisallow(bestDisallow) ? 'blocked' : 'restricted';
   }
 
   return 'allowed';
+}
+
+/** The longest rule that matches the path. The first one wins a length tie. */
+function longestMatchingRule(rules: readonly string[], requestPath: string): string | null {
+  let best: string | null = null;
+
+  for (const rule of rules) {
+    if (robotsPathMatches(rule, requestPath) && (!best || rule.length > best.length)) {
+      best = rule;
+    }
+  }
+
+  return best;
 }
 
 /** True when the rule matches `/` and a distinct path (covers `/` and `/*`). */

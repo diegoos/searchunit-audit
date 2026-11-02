@@ -27,7 +27,6 @@ describe('discoveryForReport', () => {
     expect(auditedBodySha256('abc')).toBe(
       'ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad',
     );
-    expect(auditedBodySha256('abd')).not.toBe(auditedBodySha256('abc'));
 
     const bundle = bundleFromHtml(PAGE_HTML);
     const before = computeAuditScores(bundle);

@@ -2,6 +2,7 @@ import {
   fetchErrorCode,
   fetchPublicUrl,
   classifyWellKnownFetch,
+  type FetchedPage,
   type FetchOutcome,
 } from '../lib/fetch.ts';
 import { hrefWithoutUserinfo, pageKey } from '../lib/url.ts';
@@ -81,6 +82,28 @@ export function issuesForNonPresentLlms(
   return [structuralIssue(response.error)];
 }
 
+/** Fills the result from a present llms.txt body: content, counts, capped links, and syntax issues. */
+function applyPresentLlms(result: LlmsTxtResult, response: FetchedPage, siteUrl: string): void {
+  result.content = response.body;
+  result.contentType = response.contentType;
+  result.exists = true;
+  const parsedLlms = parseLlmsTxt(response.body);
+
+  result.has_title = Boolean(parsedLlms.h1);
+  result.section_count = parsedLlms.sections.length;
+  result.has_sections = parsedLlms.sections.length > 0;
+  result.link_count = parsedLlms.links.length;
+  result.has_links = parsedLlms.links.length > 0;
+  const capped = cappedLlmsLinks(parsedLlms.links, siteUrl);
+
+  result.links = capped.links;
+  result.linksTruncated = capped.linksTruncated;
+  result.linksToAuditedUrl = capped.linksToAuditedUrl;
+  result.format_valid = result.has_title && result.has_sections && result.has_links;
+
+  result.issues.push(...parsedLlmsIssues(parsedLlms));
+}
+
 /**
  * Fetches /llms.txt and /llms-full.txt using the CLI SSRF-safe client.
  */
@@ -126,26 +149,7 @@ export async function fetchLlmsTxt(siteUrl: string): Promise<LlmsTxtResult> {
   }
 
   if (fetchStatus === 'present' && response.ok) {
-    const content = response.body;
-
-    result.content = content;
-    result.contentType = response.contentType;
-    result.exists = true;
-    const parsedLlms = parseLlmsTxt(content);
-
-    result.has_title = Boolean(parsedLlms.h1);
-    result.section_count = parsedLlms.sections.length;
-    result.has_sections = parsedLlms.sections.length > 0;
-    result.link_count = parsedLlms.links.length;
-    result.has_links = parsedLlms.links.length > 0;
-    const capped = cappedLlmsLinks(parsedLlms.links, siteUrl);
-
-    result.links = capped.links;
-    result.linksTruncated = capped.linksTruncated;
-    result.linksToAuditedUrl = capped.linksToAuditedUrl;
-    result.format_valid = result.has_title && result.has_sections && result.has_links;
-
-    result.issues.push(...parsedLlmsIssues(parsedLlms));
+    applyPresentLlms(result, response, siteUrl);
 
     return result;
   }

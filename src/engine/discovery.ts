@@ -2,6 +2,8 @@ import { createHash } from 'node:crypto';
 import { parseRobots, type ParsedRobots } from '../tools/robots/parseRobots.ts';
 import { parseLlmsTxt, type ParsedLlmsTxt } from '../tools/llmstxt/parseLlmsTxt.ts';
 import { parseHtmlPage, type ParsedPage } from './htmlParser.ts';
+import { MAIN_TEXT_CAP } from './parsers/mainContent.ts';
+import { unrenderedPage } from './render.ts';
 import { classifyPage } from './pageClassification.ts';
 import {
   crawlerAccessFromParsed,
@@ -19,6 +21,7 @@ import {
   fetchPublicUrl,
   formatFetchError,
   type FetchedPage,
+  type FetchOutcome,
 } from '../lib/fetch.ts';
 
 import { CliError } from '../lib/errors.ts';
@@ -28,21 +31,21 @@ import { cappedLlmsLinks, fetchLlmsTxt } from './llms.ts';
 import { parseSitemapForUrl, sitemapUrlsFromDeclared } from './sitemap.ts';
 import { parseSecurityHeaders } from '../tools/security/parseSecurityHeaders.ts';
 import { scoreCitabilityTexts } from './scoring.ts';
+import { httpsReadinessOfPage } from './httpsReadiness.ts';
 import { checkPageLinks, skippedLinkStatus } from './linkStatus.ts';
 import type {
   AuditedPageSnapshot,
   DiscoveryResult,
+  LlmsTxtResult,
   MobilePageSnapshot,
   PlatformSignals,
   SecurityHeadersSummary,
+  SitemapParseResult,
 } from './types.ts';
 
 /** Mobile Chrome user-agent for the second GET of the audited URL. */
 export const MOBILE_CHROME_USER_AGENT =
   'Mozilla/5.0 (Linux; Android 13; Pixel 7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.6167.101 Mobile Safari/537.36';
-
-/** Characters of main content text kept on the audited page snapshot. */
-export const MAIN_TEXT_CAP = 20_000;
 
 export type ProgressFn = (message: string) => void;
 
@@ -88,23 +91,39 @@ export function auditedBodySha256(body: string): string {
   return createHash('sha256').update(body).digest('hex');
 }
 
-function buildAuditedPageSnapshot(
-  fetched: FetchedPage,
-  parsed: ReturnType<typeof parseHtmlPage>,
-  securityHeaders: SecurityHeadersSummary,
-  robotsStatus: string,
-  robotsFetchError: string | null,
-  sitemapStatus: string,
-  pageKind: AuditedPageSnapshot['pageKind'],
-  siteType: AuditedPageSnapshot['siteType'],
-  citabilityTextCap: number,
-): AuditedPageSnapshot {
+function utf8ByteLength(body: string): number {
+  return new TextEncoder().encode(body).length;
+}
+
+interface AuditedPageInput {
+  fetched: FetchedPage;
+  parsed: ReturnType<typeof parseHtmlPage>;
+  securityHeaders: SecurityHeadersSummary;
+  robotsStatus: string;
+  robotsFetchError: string | null;
+  sitemapStatus: string;
+  pageKind: AuditedPageSnapshot['pageKind'];
+  siteType: AuditedPageSnapshot['siteType'];
+  citabilityTextCap: number;
+}
+
+function buildAuditedPageSnapshot({
+  fetched,
+  parsed,
+  securityHeaders,
+  robotsStatus,
+  robotsFetchError,
+  sitemapStatus,
+  pageKind,
+  siteType,
+  citabilityTextCap,
+}: AuditedPageInput): AuditedPageSnapshot {
   const linkHeader = parseLinkHeader(fetched.headers.link ?? null, fetched.finalUrl);
 
   return {
     url: fetched.finalUrl,
     statusCode: fetched.status,
-    byteLength: new TextEncoder().encode(fetched.body).length,
+    byteLength: utf8ByteLength(fetched.body),
     bodySha256: auditedBodySha256(fetched.body),
     redirectCount: Math.max(0, fetched.redirectChain.length - 1),
     title: parsed.title,
@@ -133,6 +152,7 @@ function buildAuditedPageSnapshot(
     mainTextTruncated: parsed.mainText.length > MAIN_TEXT_CAP,
     tables: parsed.tables,
     mixedContent: parsed.mixedContent,
+    sameHostResources: parsed.sameHostResources,
     hiddenText: parsed.hiddenText,
     charset: parsed.charset,
     trustPages: parsed.trustPages,
@@ -179,7 +199,7 @@ function mobileSnapshot(fetched: FetchedPage): MobilePageSnapshot {
 
   return {
     statusCode: fetched.status,
-    byteLength: new TextEncoder().encode(fetched.body).length,
+    byteLength: utf8ByteLength(fetched.body),
     wordCount: parsed.wordCount,
     h1: parsed.headings.h1,
     jsRenderingRisk: parsed.jsRenderingRisk,
@@ -215,23 +235,45 @@ async function loadMobilePage(url: string): Promise<MobileLoad> {
   }
 }
 
+/** Report view of llms.txt: capped links. `parsed` is null exactly when the body is absent. */
 function llmsWithReportLinks(
-  llmsTxt: DiscoveryResult['llmsTxt'],
+  llmsTxt: LlmsTxtResult,
   parsed: ParsedLlmsTxt | null,
   pageUrl: string,
-) {
-  const linked = parsed ? cappedLlmsLinks(parsed.links, pageUrl) : null;
-
-  if (llmsTxt.content === null || parsed === null) {
-    return {
-      ...llmsTxt,
-      links: [],
-      linksTruncated: false,
-      linksToAuditedUrl: linked?.linksToAuditedUrl ?? false,
-    };
+): LlmsTxtResult {
+  if (parsed === null) {
+    return { ...llmsTxt, links: [], linksTruncated: false, linksToAuditedUrl: false };
   }
 
-  return { ...llmsTxt, ...linked };
+  return { ...llmsTxt, ...cappedLlmsLinks(parsed.links, pageUrl) };
+}
+
+/** Robots access for the audited path. An unreadable robots.txt gives no rows, not allow-all. */
+function robotsAccessFor(
+  robots: FetchOutcome,
+  robotsStatus: 'present' | 'missing' | 'error',
+  pageUrl: string,
+): { crawlerAccess: RobotsTxtParseResult; parsedRobots: ParsedRobots | null } {
+  if (robotsStatus === 'present' && robots.ok) {
+    const parsedRobots = parseRobots(robots.body);
+    const path = new URL(pageUrl).pathname || '/';
+
+    return { crawlerAccess: crawlerAccessFromParsed(parsedRobots, path), parsedRobots };
+  }
+
+  if (robotsStatus === 'error') {
+    return { crawlerAccess: unknownCrawlerAccess(), parsedRobots: null };
+  }
+
+  return { crawlerAccess: parseRobotsTxt(null), parsedRobots: null };
+}
+
+function sitemapStatusOf(sitemap: SitemapParseResult): string {
+  if (sitemap.present) {
+    return 'present';
+  }
+
+  return sitemap.fetchStatus === 'error' ? 'error' : 'missing';
 }
 
 /**
@@ -273,17 +315,7 @@ export async function runLocalDiscovery(
 
   const robots = await robotsPromise;
   const robotsStatus = classifyWellKnownFetch(robots, '/robots.txt');
-  let crawlerAccess: RobotsTxtParseResult = parseRobotsTxt(null);
-  let parsedRobots: ParsedRobots | null = null;
-
-  if (robotsStatus === 'present' && robots.ok) {
-    parsedRobots = parseRobots(robots.body);
-    const path = new URL(fetched.finalUrl).pathname || '/';
-
-    crawlerAccess = crawlerAccessFromParsed(parsedRobots, path);
-  } else if (robotsStatus === 'error') {
-    crawlerAccess = unknownCrawlerAccess();
-  }
+  const { crawlerAccess, parsedRobots } = robotsAccessFor(robots, robotsStatus, fetched.finalUrl);
 
   progress('Checking sitemap');
   const sitemapUrls = sitemapUrlsFromDeclared(
@@ -298,26 +330,17 @@ export async function runLocalDiscovery(
     linkPromise,
   ]);
 
-  let sitemapStatus = 'missing';
-
-  if (sitemapParsed.present) {
-    sitemapStatus = 'present';
-  } else if (sitemapParsed.fetchStatus === 'error') {
-    sitemapStatus = 'error';
-  }
-
-  const auditedPage = buildAuditedPageSnapshot(
+  const auditedPage = buildAuditedPageSnapshot({
     fetched,
     parsed,
     securityHeaders,
     robotsStatus,
-    robotsStatus === 'error' ? fetchErrorCode(robots) : null,
-    sitemapStatus,
+    robotsFetchError: robotsStatus === 'error' ? fetchErrorCode(robots) : null,
+    sitemapStatus: sitemapStatusOf(sitemapParsed),
     pageKind,
     siteType,
     citabilityTextCap,
-  );
-
+  });
   const parsedLlms = llmsTxt.content === null ? null : parseLlmsTxt(llmsTxt.content);
   const parsedLlmsFull = llmsTxt.full_content === null ? null : parseLlmsTxt(llmsTxt.full_content);
   const platform_signals = platformSignalsFor(parsed);
@@ -353,6 +376,8 @@ export async function runLocalDiscovery(
     mobilePage: mobile.page,
     mobileFetchError: mobile.error,
     linkStatus,
+    httpsReadiness: httpsReadinessOfPage(fetched.finalUrl, parsed),
+    renderedPage: unrenderedPage('not-requested'),
     pagesSampled: 1,
     pageHeaders: fetched.headers,
     requestedUrl,

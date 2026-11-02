@@ -9,7 +9,7 @@ interface CrawlerAccessEntry {
   crawl_delay_seconds: number | null;
 }
 
-export interface WildcardRules {
+interface WildcardRules {
   allow: string[];
   disallow: string[];
 }
@@ -46,10 +46,6 @@ interface AgentRules {
   allow: string[];
   disallow: string[];
   crawl_delay: number | null;
-}
-
-function resolveStatus(rules: AgentRules, requestPath: string): CrawlerAccessStatus {
-  return resolveRobotsAccess(rules.allow, rules.disallow, requestPath);
 }
 
 function emptyRules(): AgentRules {
@@ -99,20 +95,9 @@ function rulesFromParsed(parsed: ParsedRobots): {
   return { agents, sitemaps: parsed.sitemaps };
 }
 
+/** Rules for the bot's own group, else the `*` group, else no rules. */
 function pickRules(agents: Map<string, AgentRules>, bot: string): AgentRules {
-  const exact = agents.get(agentKey(bot));
-
-  if (exact) {
-    return exact;
-  }
-
-  const wildcard = agents.get('*');
-
-  if (wildcard) {
-    return wildcard;
-  }
-
-  return emptyRules();
+  return agents.get(agentKey(bot)) ?? agents.get('*') ?? emptyRules();
 }
 
 /** Fetch/parse unknown: no crawler rows (scored as 50, not allow-all). */
@@ -130,7 +115,7 @@ export function crawlerAccessFromParsed(
 
     return {
       bot,
-      status: resolveStatus(rules, requestPath),
+      status: resolveRobotsAccess(rules.allow, rules.disallow, requestPath),
       crawl_delay_seconds: rules.crawl_delay,
     };
   });

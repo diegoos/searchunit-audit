@@ -41,13 +41,15 @@ import {
   type ParsedSchemaBlock,
 } from '../tools/schema/parseSchema.ts';
 import { parseMetaFromDom, type MetaTags } from '../tools/meta/parseMeta.ts';
-import { extractMainContent } from './parsers/mainContent.ts';
+import { collapseWhitespace, extractMainContent } from './parsers/mainContent.ts';
 import {
   extractCharset,
   extractHeadingOutline,
   extractHiddenText,
   extractMixedContent,
+  extractSameHostResources,
   extractTrustPages,
+  sameSite,
   type HeadingOutlineItem,
   type HiddenText,
   type MixedContent,
@@ -131,6 +133,11 @@ export interface ParsedPage {
   visibleText: string;
   schemaBlocks: ParsedSchemaBlock[];
   metaTags: MetaTags;
+  sameHostResources: string[];
+}
+
+function isHttpUrl(url: URL): boolean {
+  return url.protocol === 'http:' || url.protocol === 'https:';
 }
 
 /** `link[rel=sitemap]` plus same-document anchors whose path looks like a sitemap file. */
@@ -148,7 +155,7 @@ function extractSitemapUrls($: cheerio.CheerioAPI, baseUrl: string): string[] {
     try {
       const resolved = new URL(trimmed, baseUrl);
 
-      if (resolved.protocol !== 'http:' && resolved.protocol !== 'https:') {
+      if (!isHttpUrl(resolved)) {
         return;
       }
 
@@ -193,23 +200,11 @@ function visibleBodyText($: cheerio.CheerioAPI): string {
 
   clone.find('script, style, noscript, template').remove();
 
-  return clone.text().replace(/\s+/g, ' ').trim();
+  return collapseWhitespace(clone.text());
 }
 
 function countWords(text: string): number {
-  if (!text) {
-    return 0;
-  }
-
-  let wordCount = 0;
-
-  text.replace(/\S+/g, () => {
-    wordCount++;
-
-    return '';
-  });
-
-  return wordCount;
+  return text.match(/\S+/g)?.length ?? 0;
 }
 
 const HEADING_TEXT_CAP = 40;
@@ -223,22 +218,19 @@ function skipLinkHref(href: string): boolean {
   return !href || href.startsWith('#') || href.startsWith('mailto:') || href.startsWith('tel:');
 }
 
-function resolvedHttpUrl(href: string, base: URL): URL | null {
-  if (skipLinkHref(href)) {
-    return null;
-  }
-
+/** `href` resolved against `base` without userinfo, or null when it is not an http(s) URL. */
+function parseHttpUrl(href: string, base: URL): URL | null {
   try {
     const resolved = stripUserinfo(new URL(href, base));
 
-    if (resolved.protocol !== 'http:' && resolved.protocol !== 'https:') {
-      return null;
-    }
-
-    return resolved;
+    return isHttpUrl(resolved) ? resolved : null;
   } catch {
     return null;
   }
+}
+
+function resolvedHttpUrl(href: string, base: URL): URL | null {
+  return skipLinkHref(href) ? null : parseHttpUrl(href, base);
 }
 
 function pushLink(links: PageLink[], seen: Set<string>, link: PageLink, cap: number): void {
@@ -382,13 +374,10 @@ function readPageLinks(
     }
 
     const value = resolved.toString();
-    const text = $(el).text().replace(/\s+/g, ' ').trim().slice(0, ANCHOR_TEXT_CAP);
+    const text = collapseWhitespace($(el).text()).slice(0, ANCHOR_TEXT_CAP);
     const link: PageLink = { href: value, text, ...anchorNameParts($, el) };
 
-    if (
-      resolved.hostname.replace(/^www\./i, '').toLowerCase() !==
-      base.hostname.replace(/^www\./i, '').toLowerCase()
-    ) {
+    if (!sameSite(resolved, base)) {
       pushLink(outboundLinks, outboundSeen, link, OUTBOUND_LINK_CAP);
 
       return;
@@ -513,8 +502,7 @@ function listItemPosition(entry: unknown): number | null {
   return Number.isFinite(position) ? position : null;
 }
 
-// Sorts by `position` only when every entry has one; otherwise keeps document order.
-
+/** Sorts by `position` only when every entry has one; otherwise keeps document order. */
 function orderedListItems(items: unknown[]): unknown[] {
   const positions = items.map((entry) => listItemPosition(entry));
 
@@ -566,7 +554,7 @@ function breadcrumbParent(blocks: unknown[], base: URL): string | null {
     visit(block);
   }
 
-  return hrefs.length >= 2 ? (hrefs[hrefs.length - 2] ?? null) : null;
+  return parentCrumbHref(hrefs);
 }
 
 function htmlBreadcrumbParent($: cheerio.CheerioAPI, base: URL): string | null {
@@ -587,6 +575,11 @@ function htmlBreadcrumbParent($: cheerio.CheerioAPI, base: URL): string | null {
     }
   });
 
+  return parentCrumbHref(hrefs);
+}
+
+/** The parent is the second-to-last crumb; a single crumb has no parent. */
+function parentCrumbHref(hrefs: readonly (string | null)[]): string | null {
   return hrefs.length >= 2 ? (hrefs[hrefs.length - 2] ?? null) : null;
 }
 
@@ -595,7 +588,7 @@ function resolvedBreadcrumb($: cheerio.CheerioAPI, blocks: unknown[], base: URL)
 }
 
 function visibleTextFacts(text: string): { visibleTextSha256: string; visibleTextExcerpt: string } {
-  const collapsed = text.replace(/\s+/g, ' ').trim();
+  const collapsed = collapseWhitespace(text);
 
   return {
     visibleTextSha256: createHash('sha256').update(collapsed).digest('hex'),
@@ -620,17 +613,7 @@ function pageSocial(tags: MetaTags, base: URL): ParsedPage['social'] {
 }
 
 function httpUrl(href: string, base: URL): string | null {
-  try {
-    const resolved = stripUserinfo(new URL(href, base));
-
-    if (resolved.protocol !== 'http:' && resolved.protocol !== 'https:') {
-      return null;
-    }
-
-    return resolved.toString();
-  } catch {
-    return null;
-  }
+  return parseHttpUrl(href, base)?.toString() ?? null;
 }
 
 /** Loads the HTML and extracts the full {@link ParsedPage} by orchestrating the sub-parsers. */
@@ -673,12 +656,7 @@ export function parseHtmlPage(
   const wordCount = countWords(mainContent.text);
   const visible = visibleTextFacts(text);
 
-  let canonicalUrl: string | null = null;
-
-  if (canonical) {
-    canonicalUrl = httpUrl(canonical, base);
-  }
-
+  const canonicalUrl = canonical ? httpUrl(canonical, base) : null;
   const jsonLdScripts = parseJsonLdScripts($);
   const jsonLdBlocks = jsonLdScripts.map((script) => script.json);
   const schemaBlocks = parseSchemaFromScripts(jsonLdScripts);
@@ -711,6 +689,7 @@ export function parseHtmlPage(
     mainText: mainContent.text,
     tables: mainContent.tables,
     mixedContent: extractMixedContent($, base),
+    sameHostResources: extractSameHostResources($, base),
     hiddenText: extractHiddenText($),
     charset: extractCharset($),
     trustPages: extractTrustPages($, base),

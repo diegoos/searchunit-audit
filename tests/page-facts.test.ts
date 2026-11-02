@@ -253,15 +253,30 @@ describe('og:image and hero image', () => {
     expect(finding?.detail).toContain('https://example.com/img/logo-share.png');
     expect(finding?.detail).toContain('/hero.jpg');
   });
-  test('no og-image hero finding for a photo og:image', () => {
-    const html = `<html><head>
-      <meta property="og:image" content="https://example.com/img/photo.jpg"/>
+  test.each(['photo.jpg', 'iconic-bridge.jpg', 'catalogo/sapato.jpg'])(
+    'no og-image hero finding for the photo og:image %s',
+    (path) => {
+      const html = `<html><head>
+      <meta property="og:image" content="https://example.com/img/${path}"/>
     </head><body><main><img src="/hero.jpg" alt="Hero"/></main></body></html>`;
 
-    expect(
-      findingById(pageMetaFindings(bundleFromHtml(html)), 'meta:og-image-hero'),
-    ).toBeUndefined();
-  });
+      expect(
+        findingById(pageMetaFindings(bundleFromHtml(html)), 'meta:og-image-hero'),
+      ).toBeUndefined();
+    },
+  );
+  test.each(['icons/share.png', 'favicon.png', 'brand_logo.svg'])(
+    'warns for the icon or logo og:image %s',
+    (path) => {
+      const html = `<html><head>
+      <meta property="og:image" content="https://example.com/${path}"/>
+    </head><body><main><img src="/hero.jpg" alt="Hero"/></main></body></html>`;
+
+      expect(
+        findingById(pageMetaFindings(bundleFromHtml(html)), 'meta:og-image-hero')?.severity,
+      ).toBe('warn');
+    },
+  );
   test('warns on a lazy hero image and passes an eager high-priority one', () => {
     const lazy = bundleFromHtml(
       `<html><body><main><img src="/hero.jpg" alt="Hero" loading="lazy"/></main></body></html>`,
