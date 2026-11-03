@@ -118,6 +118,10 @@ export function bundleFromHtml(html: string): DiscoveryBundle {
     x_content_type: true,
     referrer_policy: false,
     x_robots_tag: null,
+    permissions_policy: null,
+    cross_origin_opener_policy: null,
+    cross_origin_embedder_policy: null,
+    cross_origin_resource_policy: null,
   };
   const crawlerAccess = parseRobotsTxt(
     'User-agent: *\nAllow: /\nSitemap: https://example.com/sitemap.xml\n',

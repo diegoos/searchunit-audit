@@ -131,6 +131,10 @@ export interface SecurityHeadersSummary {
   x_content_type: boolean;
   referrer_policy: boolean;
   x_robots_tag: string | null;
+  permissions_policy: string | null;
+  cross_origin_opener_policy: string | null;
+  cross_origin_embedder_policy: string | null;
+  cross_origin_resource_policy: string | null;
 }
 
 export interface MobilePageSnapshot {

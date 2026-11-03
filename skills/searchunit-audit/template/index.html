@@ -2165,6 +2165,12 @@
           effect: headerState(on),
           tone: '',
         });
+        const valueRow = (name, value) => ({
+          name,
+          state: value || 'absent',
+          effect: value ? 'present' : 'absent',
+          tone: '',
+        });
 
         return [
           row('HSTS', headers.hsts),
@@ -2172,12 +2178,11 @@
           row('X-Frame-Options', headers.x_frame),
           row('X-Content-Type-Options', headers.x_content_type),
           row('Referrer-Policy', headers.referrer_policy),
-          {
-            name: 'X-Robots-Tag',
-            state: headers.x_robots_tag || 'absent',
-            effect: headers.x_robots_tag ? 'present' : 'absent',
-            tone: '',
-          },
+          valueRow('X-Robots-Tag', headers.x_robots_tag),
+          valueRow('Permissions-Policy', headers.permissions_policy),
+          valueRow('Cross-Origin-Opener-Policy', headers.cross_origin_opener_policy),
+          valueRow('Cross-Origin-Embedder-Policy', headers.cross_origin_embedder_policy),
+          valueRow('Cross-Origin-Resource-Policy', headers.cross_origin_resource_policy),
         ];
       }
 

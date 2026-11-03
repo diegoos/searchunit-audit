@@ -42,6 +42,7 @@ function isSideFile(url: string): boolean {
 async function withFetchStub(
   mobile: (url: string) => FetchOutcome | Promise<FetchOutcome>,
   assert: (calls: { url: string; userAgent?: string }[]) => Promise<void>,
+  desktopHeaders: Record<string, string> = {},
 ): Promise<void> {
   const previous = process.env.CRUX_API_KEY;
   const calls: { url: string; userAgent?: string }[] = [];
@@ -59,7 +60,7 @@ async function withFetchStub(
         return failure(url);
       }
 
-      return page(url, DESKTOP_HTML);
+      return page(url, DESKTOP_HTML, desktopHeaders);
     },
   );
 
@@ -109,6 +110,27 @@ describe('mobile page snapshot', () => {
         expect(kind.auditScope).toMatchObject({ level: 'page', pagesScored: 1 });
         expect(kind.auditScope.contextFetches.linksProbed).toBe(0);
         expect(audit.linkStatus.status).toBe('completed');
+      },
+    );
+  });
+  test('the advisory security header values reach the summary', async () => {
+    await withFetchStub(
+      (url) => page(url, MOBILE_HTML),
+      async () => {
+        const bundle = await runLocalDiscovery('https://example.com/');
+
+        expect(bundle.securityHeaders).toMatchObject({
+          permissions_policy: 'geolocation=()',
+          cross_origin_opener_policy: 'same-origin',
+          cross_origin_embedder_policy: 'require-corp',
+          cross_origin_resource_policy: 'same-origin',
+        });
+      },
+      {
+        'permissions-policy': 'geolocation=()',
+        'cross-origin-opener-policy': 'same-origin',
+        'cross-origin-embedder-policy': 'require-corp',
+        'cross-origin-resource-policy': 'same-origin',
       },
     );
   });

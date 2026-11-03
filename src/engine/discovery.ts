@@ -83,6 +83,10 @@ function readSecurityHeaders(headers: Record<string, string>): SecurityHeadersSu
     x_content_type: Boolean(raw.xContentType),
     referrer_policy: Boolean(raw.referrerPolicy),
     x_robots_tag: raw.xRobotsTag,
+    permissions_policy: raw.permissionsPolicy,
+    cross_origin_opener_policy: raw.coop,
+    cross_origin_embedder_policy: raw.coep,
+    cross_origin_resource_policy: raw.corp,
   };
 }
 
