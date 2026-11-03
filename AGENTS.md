@@ -6,7 +6,7 @@ Local CLI: one public URL or a loopback dev server, static HTTP, deterministic S
 
 Published runtime is Node >= 20. `npx @searchunit/cli` runs that bundle; Bun is the dev toolchain (`mise.toml`, `bun.lock`). Source entry is `src/index.ts`. `bun run build` / `prepack` write `dist/cli.js` (Node target, shebang). Leave `dist/` out of git.
 
-Commands: `package.json` `scripts`. After TS edits, run `bun run fmt` (vertical spacing in `scripts/apply-vertical-spacing.ts`, then oxfmt).
+Commands: `package.json` `scripts`. After TS edits, run `bun run fmt` (oxfmt).
 
 Tests are `bun:test`, in-process, inline HTML fixtures. Stay on those fixtures; skip live HTTP, nock, and Playwright. `src/` stays Node-compatible: use the `yaml` package for YAML, not `bun` imports.
 

@@ -38,8 +38,8 @@
     "test:skill": "bun test ./skills/searchunit-audit/tests",
     "lint": "oxlint ./src ./tests",
     "lint:fix": "oxlint --fix ./src ./tests",
-    "fmt": "bun scripts/apply-vertical-spacing.ts && oxfmt",
-    "fmt:check": "bun scripts/apply-vertical-spacing.ts --check && oxfmt --check",
+    "fmt": "oxfmt",
+    "fmt:check": "oxfmt --check",
     "check": "tsc --noEmit",
     "prepare": "husky"
   },
