@@ -415,7 +415,7 @@ function checkPriority(sections, planIds, itemTitles, problems) {
 // accepts. `-o` / `--output` writes a file and is not a read flag. Text from the audited site
 // cannot become a command or a file write.
 const READ_COMMAND =
-  /^(?:searchunit|npx --yes @searchunit\/cli|bun (?![\w.~/-]*\.\.)[\w.~/-]*searchunit[\w.~/-]*\/src\/index\.ts) (audit|seo-check|geo-check|meta-check|schema-check|robots-check|llms-txt-check|security-headers|gsc(?: (?:check|inspect|queries|pages|query-pages|page-queries|sampled-pages|search-appearance|discover|google-news|sitemaps))?)((?: "https?:\/\/[^"\s`$\\!']+")*)((?: \S+)*)$/;
+  /^(?:searchunit|npx --yes @searchunit\/cli|bun (?![\w.~/-]*\.\.)([\w.~/-]+)\/src\/index\.ts) (audit|seo-check|geo-check|meta-check|schema-check|robots-check|llms-txt-check|security-headers|gsc(?: (?:check|inspect|queries|pages|query-pages|page-queries|sampled-pages|search-appearance|discover|google-news|sitemaps))?)((?: "https?:\/\/[^"\s`$\\!']+")*)((?: \S+)*)$/;
 const KIND_COMMANDS = new Set(['audit', 'seo-check', 'geo-check']);
 const BARE_FLAGS = new Set(['--agent', '--silent', '--json', '--no-color']);
 const DATE = /^\d{4}-\d{2}-\d{2}$/;
@@ -433,12 +433,27 @@ const VALUE_FLAGS = {
 const COMMAND_LIKE =
   /^(?:[\w.~/-]+\/)?(?:searchunit|npx|bunx?|node|npm|pnpm|yarn|curl|wget|sh|bash|zsh|python3?|rm|sudo|chmod|git|eval|source|reboot|halt|shutdown|poweroff|dd|mkfs|fdisk|passwd|chown|killall|kill)(?:\s|$)|\$\(|&&|\|\||\|\s*(?:ba|z)?sh\b/i;
 
+// A `bun <repo>/src/index.ts` read command is a dev build only when <repo>/package.json
+// names @searchunit/cli. A path that only contains "searchunit" is not enough.
+function isCliCheckout(repoPath) {
+  try {
+    const manifest = JSON.parse(readFileSync(resolve(repoPath, 'package.json'), 'utf8'));
+
+    return manifest.name === '@searchunit/cli';
+  } catch {
+    return false;
+  }
+}
+
 function isReadCommand(command) {
   const match = command.match(READ_COMMAND);
 
   if (match == null) return false;
 
-  const [, name, urls, flags] = match;
+  const [, bunPath, name, urls, flags] = match;
+
+  if (bunPath !== undefined && !isCliCheckout(bunPath)) return false;
+
   const urlCount = (urls.match(/ "/g) ?? []).length;
 
   // `gsc check` takes no URL, other gsc reads take at least one, the rest take exactly one.

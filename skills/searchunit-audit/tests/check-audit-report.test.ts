@@ -17,10 +17,16 @@ interface Files {
   prefill?: unknown[];
   /** The earlier run's cli-audit.json, passed as --previous. */
   previous?: Record<string, unknown>;
+  /** Working directory for the validator process. */
+  cwd?: string;
 }
 
-function run(args: string[]) {
-  const result = spawnSync('node', [SCRIPT, ...args], { encoding: 'utf8', timeout: 10_000 });
+function run(args: string[], cwd?: string) {
+  const result = spawnSync('node', [SCRIPT, ...args], {
+    encoding: 'utf8',
+    timeout: 10_000,
+    cwd,
+  });
 
   if (result.error) throw result.error;
 
@@ -50,7 +56,16 @@ function check(files: Files) {
     args.push('--previous', write('previous-cli-audit.json', JSON.stringify(files.previous)));
   }
 
-  return run(args);
+  return run(args, files.cwd);
+}
+
+/** A temp directory that looks like a CLI checkout: package.json names @searchunit/cli. */
+function cliCheckout(manifest: Record<string, unknown> = { name: '@searchunit/cli' }): string {
+  const dir = mkdtempSync(join(tmpdir(), 'su-cli-'));
+
+  writeFileSync(join(dir, 'package.json'), JSON.stringify(manifest));
+
+  return dir;
 }
 
 const SLUGS = run(['--slugs']).stdout.trim().split('\n');
@@ -381,10 +396,10 @@ const passes: [string, () => Files][] = [
   ['a valid report with prose', () => ({ ...valid(), prose: proseFor() })],
   ['a valid report without prose', () => valid()],
   [
-    'a Re-audit bun dev-build path containing searchunit',
+    'a Re-audit bun dev-build path in the CLI checkout',
     () =>
       REAUDIT_LINE(
-        'bun /repo/searchunit-cli/src/index.ts audit "https://www.test.com/" --agent --silent',
+        `bun ${cliCheckout()}/src/index.ts audit "https://www.test.com/" --agent --silent`,
       ),
   ],
   [
@@ -1079,8 +1094,25 @@ const failures: [string, () => Files, string[]][] = [
     ['Re-audit: command is not a SearchUnit read command'],
   ],
   [
-    'a Re-audit bun path without searchunit in it',
-    () => REAUDIT_LINE('bun /repo/other-cli/src/index.ts audit "https://www.test.com/" --agent'),
+    'a Re-audit bun path with searchunit in it but no package.json',
+    () =>
+      REAUDIT_LINE('bun /repo/searchunit-cli/src/index.ts audit "https://www.test.com/" --agent'),
+    ['Re-audit: command is not a SearchUnit read command'],
+  ],
+  [
+    'a Re-audit bun path whose package.json names another package',
+    () =>
+      REAUDIT_LINE(
+        `bun ${cliCheckout({ name: 'other-cli' })}/src/index.ts audit "https://www.test.com/" --agent`,
+      ),
+    ['Re-audit: command is not a SearchUnit read command'],
+  ],
+  [
+    'a Re-audit bun path of /src/index.ts is rejected even in a CLI checkout cwd',
+    () => ({
+      ...REAUDIT_LINE('bun /src/index.ts audit "https://www.test.com/" --agent'),
+      cwd: cliCheckout(),
+    }),
     ['Re-audit: command is not a SearchUnit read command'],
   ],
   [
