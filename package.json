@@ -1,0 +1,69 @@
+{
+  "name": "@searchunit/cli",
+  "version": "0.0.1",
+  "description": "Local CLI for deterministic SEO/GEO readiness audits",
+  "keywords": [
+    "audit",
+    "cli",
+    "geo",
+    "searchunit",
+    "seo"
+  ],
+  "homepage": "https://searchunit.io/",
+  "bugs": {
+    "url": "https://github.com/diegoos/searchunit-cli/issues"
+  },
+  "license": "MIT",
+  "author": "Diego Oliveira",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/diegoos/searchunit-cli.git"
+  },
+  "bin": {
+    "searchunit": "dist/cli.js"
+  },
+  "files": [
+    "dist"
+  ],
+  "type": "module",
+  "publishConfig": {
+    "access": "public"
+  },
+  "scripts": {
+    "searchunit": "bun run src/index.ts",
+    "start": "bun run src/index.ts",
+    "build": "bun build src/index.ts --outfile dist/cli.js --target node --format esm --packages external --banner='#!/usr/bin/env node' && chmod +x dist/cli.js",
+    "prepack": "bun run build",
+    "test": "bun test",
+    "test:skill": "bun test ./skills/searchunit-audit/tests",
+    "lint": "oxlint ./src ./tests",
+    "lint:fix": "oxlint --fix ./src ./tests",
+    "fmt": "oxfmt",
+    "fmt:check": "oxfmt --check",
+    "check": "tsc --noEmit",
+    "prepare": "husky"
+  },
+  "dependencies": {
+    "chalk": "^6.0.1",
+    "cheerio": "^1.2.0",
+    "cli-table3": "^0.6.5",
+    "googleapis": "^189.0.0",
+    "ipaddr.js": "^2.5.0",
+    "ora": "^10.0.0",
+    "tldts": "^7.4.19",
+    "undici": "7.30.1",
+    "yaml": "^2.9.1"
+  },
+  "devDependencies": {
+    "@types/bun": "^1.4.4",
+    "@types/node": "^26.6.6",
+    "happy-dom": "21.0.4",
+    "husky": "^9.1.7",
+    "oxfmt": "^0.75.0",
+    "oxlint": "^1.90.0",
+    "typescript": "^7.0.2"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}

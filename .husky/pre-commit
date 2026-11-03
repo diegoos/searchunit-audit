@@ -1,0 +1,3 @@
+gitleaks git . --verbose
+bun lint
+bun test

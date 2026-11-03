@@ -1,0 +1,3843 @@
+<!doctype html>
+<html lang="en-US">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>SearchUnit Audit</title>
+    <!-- The page shows site text from the audit. If an escape ever fails, this policy still blocks remote images, requests, and frames. -->
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline' https://fonts.googleapis.com; font-src https://fonts.gstatic.com; img-src data:; connect-src 'none'; frame-src 'none'; base-uri 'none'; form-action 'none'"
+    />
+    <script>
+      (function () {
+        var theme = 'light';
+        try {
+          var stored = localStorage.getItem('searchunit-audit-theme');
+          if (stored === 'light' || stored === 'dark') theme = stored;
+          else if (window.matchMedia && matchMedia('(prefers-color-scheme: dark)').matches) {
+            theme = 'dark';
+          }
+        } catch (error) {
+          theme = 'light';
+        }
+        document.documentElement.dataset.theme = theme;
+      })();
+    </script>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Inter:ital,opsz,wght@0,14..32,100..900;1,14..32,100..900&display=swap"
+      rel="stylesheet"
+    />
+    <style>
+      /* Light tokens. Dark tokens repeat below for the system setting without JS and for the toggle. */
+      :root {
+        color-scheme: light;
+        --bg: #f5f6f8;
+        --surface: #ffffff;
+        --sunk: #eef1f5;
+        --ink: #111827;
+        --muted: #4b5563;
+        --line: #d6dce5;
+        --line-strong: #8b96a6;
+        --accent: #0f766e;
+        --accent-soft: #e3f2ef;
+        --focus: #0f766e;
+        --fail: #b42318;
+        --fail-soft: #fef3f2;
+        --fail-line: #f9b4ae;
+        --warn: #b54708;
+        --warn-soft: #fffaeb;
+        --warn-line: #fedf89;
+        --ok: #067647;
+        --ok-soft: #ecfdf3;
+        --ok-line: #a6f4c5;
+        --info: #175cd3;
+        --info-soft: #eff8ff;
+        --info-line: #b2ddff;
+        --hero-bg: #111827;
+        --hero-ink: #f9fafb;
+        --hero-muted: #cdd5df;
+        --hero-track: rgb(255 255 255 / 0.2);
+        --hero-accent: #5eead4;
+        --font: 'Inter', ui-sans-serif, system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
+        --font-mono: ui-monospace, 'SFMono-Regular', Menlo, Consolas, 'Liberation Mono', monospace;
+        /* One spacing scale for every gap and padding. */
+        --s-1: 0.25rem;
+        --s-2: 0.5rem;
+        --s-3: 0.75rem;
+        --s-4: 1rem;
+        --s-5: 1.5rem;
+        --s-6: 2rem;
+        /* Zebra tint follows the ink, so it works in light and dark. */
+        --zebra: color-mix(in srgb, var(--ink) 6%, transparent);
+      }
+
+      @media (prefers-color-scheme: dark) {
+        :root:not([data-theme='light']) {
+          color-scheme: dark;
+          --bg: #0d1117;
+          --surface: #161b22;
+          --sunk: #1c232d;
+          --ink: #e6edf3;
+          --muted: #9da7b3;
+          --line: #2d3643;
+          --line-strong: #5f6b7c;
+          --accent: #5eead4;
+          --accent-soft: #15302d;
+          --focus: #5eead4;
+          --fail: #fda29b;
+          --fail-soft: #2a1614;
+          --fail-line: #7a2f28;
+          --warn: #fdb022;
+          --warn-soft: #2a200c;
+          --warn-line: #7a5a12;
+          --ok: #6ce9a6;
+          --ok-soft: #0f2a1e;
+          --ok-line: #23643f;
+          --info: #84caff;
+          --info-soft: #0f2236;
+          --info-line: #245b8a;
+          --hero-bg: #0a1f1d;
+          --hero-ink: #e6edf3;
+          --hero-muted: #a9b6c4;
+          --hero-track: rgb(255 255 255 / 0.16);
+          --hero-accent: #5eead4;
+        }
+      }
+
+      :root[data-theme='dark'] {
+        color-scheme: dark;
+        --bg: #0d1117;
+        --surface: #161b22;
+        --sunk: #1c232d;
+        --ink: #e6edf3;
+        --muted: #9da7b3;
+        --line: #2d3643;
+        --line-strong: #5f6b7c;
+        --accent: #5eead4;
+        --accent-soft: #15302d;
+        --focus: #5eead4;
+        --fail: #fda29b;
+        --fail-soft: #2a1614;
+        --fail-line: #7a2f28;
+        --warn: #fdb022;
+        --warn-soft: #2a200c;
+        --warn-line: #7a5a12;
+        --ok: #6ce9a6;
+        --ok-soft: #0f2a1e;
+        --ok-line: #23643f;
+        --info: #84caff;
+        --info-soft: #0f2236;
+        --info-line: #245b8a;
+        --hero-bg: #0a1f1d;
+        --hero-ink: #e6edf3;
+        --hero-muted: #a9b6c4;
+        --hero-track: rgb(255 255 255 / 0.16);
+        --hero-accent: #5eead4;
+      }
+
+      *,
+      *::before,
+      *::after {
+        box-sizing: border-box;
+      }
+
+      /* Grid tracks never grow past the column, so wide children cannot push the page. */
+      .main,
+      .block-body,
+      .split,
+      .facts,
+      .fields,
+      .items,
+      .parts,
+      .callouts,
+      .subscores,
+      .steps,
+      .lines,
+      .rows,
+      .group,
+      .reading,
+      .hero-grid,
+      .layout,
+      .scale,
+      .action > div,
+      .row-main {
+        grid-template-columns: minmax(0, 1fr);
+      }
+
+      [hidden] {
+        display: none !important;
+      }
+
+      html {
+        -webkit-text-size-adjust: 100%;
+      }
+
+      body {
+        margin: 0;
+        background: var(--bg);
+        color: var(--ink);
+        font-family: var(--font);
+        font-optical-sizing: auto;
+        font-size: 1rem;
+        line-height: 1.5;
+        text-align: start;
+        -webkit-font-smoothing: antialiased;
+      }
+
+      h1,
+      h2,
+      h3,
+      h4,
+      p {
+        margin: 0;
+      }
+
+      h2 {
+        font-size: 1.35rem;
+        line-height: 1.25;
+        font-weight: 700;
+        letter-spacing: -0.01em;
+      }
+
+      h3 {
+        font-size: 1.05rem;
+        line-height: 1.35;
+        font-weight: 700;
+      }
+
+      h4 {
+        font-size: 1rem;
+        line-height: 1.4;
+        font-weight: 600;
+      }
+
+      a {
+        color: var(--accent);
+        text-underline-offset: 0.18em;
+      }
+
+      code {
+        font-family: var(--font-mono);
+        font-size: 0.86em;
+        background: var(--sunk);
+        border-radius: 0.25rem;
+        padding: 0.05em 0.3em;
+        overflow-wrap: anywhere;
+      }
+
+      :focus-visible {
+        outline: 3px solid var(--focus);
+        outline-offset: 2px;
+      }
+
+      .wrap {
+        width: min(74rem, 100% - 2rem);
+        margin-inline: auto;
+      }
+
+      .muted {
+        color: var(--muted);
+      }
+
+      .empty {
+        color: var(--muted);
+      }
+
+      .skip {
+        position: absolute;
+        left: 1rem;
+        top: 0.75rem;
+        transform: translateY(-220%);
+        background: var(--ink);
+        color: var(--surface);
+        padding: 0.55rem 0.9rem;
+        border-radius: 0.4rem;
+        z-index: 20;
+      }
+
+      .skip:focus {
+        transform: none;
+      }
+
+      button {
+        font: inherit;
+        font-weight: 600;
+        font-size: 0.9rem;
+        color: var(--ink);
+        background: var(--surface);
+        border: 1px solid var(--line-strong);
+        border-radius: 0.5rem;
+        min-height: 2.5rem;
+        padding: 0.4rem 0.85rem;
+        cursor: pointer;
+        transition:
+          background-color 150ms ease-out,
+          color 150ms ease-out,
+          border-color 150ms ease-out,
+          transform 150ms ease-out;
+      }
+
+      button:hover {
+        border-color: var(--ink);
+      }
+
+      button:active:not(:disabled) {
+        transform: scale(0.96);
+      }
+
+      /* Top bar */
+      .masthead {
+        background: var(--surface);
+        border-bottom: 1px solid var(--line);
+      }
+
+      .masthead-in {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 1rem;
+        padding-block: 0.6rem;
+      }
+
+      .brand {
+        display: flex;
+        align-items: center;
+        gap: 0.6rem;
+        font-size: 1.05rem;
+        font-weight: 700;
+        letter-spacing: -0.01em;
+      }
+
+      .brand-logo {
+        width: 2rem;
+        height: 2rem;
+        display: block;
+      }
+
+      .brand-logo svg {
+        width: 100%;
+        height: 100%;
+        display: block;
+      }
+
+      .brand span {
+        color: var(--accent);
+      }
+
+      .theme {
+        width: 2.5rem;
+        padding: 0;
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+      }
+
+      /* Theme icons cross-fade with blur and scale. The state comes from aria-pressed. */
+      .theme-icons {
+        display: grid;
+      }
+
+      .theme-icons svg {
+        grid-area: 1 / 1;
+        width: 1.25rem;
+        height: 1.25rem;
+        display: block;
+        transition:
+          opacity 250ms cubic-bezier(0.2, 0, 0, 1),
+          filter 250ms cubic-bezier(0.2, 0, 0, 1),
+          transform 250ms cubic-bezier(0.2, 0, 0, 1);
+      }
+
+      .theme[aria-pressed='true'] .i-moon,
+      .theme[aria-pressed='false'] .i-sun {
+        opacity: 0;
+        filter: blur(2px);
+        transform: scale(0.25);
+      }
+
+      /* Page heading: the URL is the title. */
+      .page-head {
+        padding-block: clamp(1.5rem, 4vw, 2.5rem) 1.5rem;
+        border-bottom: 1px solid var(--line);
+      }
+
+      .page-url {
+        font-size: clamp(1.4rem, 1.05rem + 1.5vw, 2.1rem);
+        line-height: 1.2;
+        font-weight: 700;
+        letter-spacing: -0.015em;
+        overflow-wrap: anywhere;
+      }
+
+      .page-url a {
+        color: inherit;
+        text-decoration-thickness: 1px;
+      }
+
+      .page-meta {
+        display: flex;
+        flex-wrap: wrap;
+        align-items: center;
+        gap: 0.5rem 0.6rem;
+        margin-top: 0.9rem;
+        font-size: 0.92rem;
+        color: var(--muted);
+      }
+
+      .chip {
+        display: inline-flex;
+        align-items: center;
+        gap: 0.35rem;
+        font-size: 0.85rem;
+        color: var(--ink);
+        background: var(--surface);
+        border: 1px solid var(--line);
+        border-radius: 999px;
+        padding: 0.2rem 0.7rem;
+      }
+
+      .chip.warn {
+        background: var(--warn-soft);
+        border-color: var(--warn-line);
+      }
+
+      .status {
+        margin-top: 2rem;
+        font-size: 1.15rem;
+        color: var(--muted);
+        max-width: 40rem;
+      }
+
+      /* Two columns from 60rem: section list on the left, report on the right. */
+      .layout {
+        display: grid;
+        grid-template-columns: minmax(0, 1fr);
+        gap: 1.25rem;
+        padding-block: 1.25rem 4rem;
+      }
+
+      .toc {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 0.35rem;
+        align-items: center;
+      }
+
+      .toc-group {
+        flex: 0 0 100%;
+        margin-top: 0.4rem;
+        font-size: 0.82rem;
+        font-weight: 600;
+        color: var(--muted);
+      }
+
+      .toc a {
+        display: inline-flex;
+        align-items: center;
+        min-height: 2.5rem;
+        padding: 0.3rem 0.75rem;
+        border: 1px solid var(--line);
+        border-radius: 0.5rem;
+        background: var(--surface);
+        color: var(--ink);
+        text-decoration: none;
+        font-size: 0.92rem;
+        white-space: nowrap;
+        position: relative;
+        transition:
+          background-color 150ms ease-out,
+          color 150ms ease-out,
+          border-color 150ms ease-out;
+      }
+
+      .toc a:hover {
+        border-color: var(--ink);
+      }
+
+      .toc a[aria-current='true'] {
+        border-color: var(--accent);
+        background: var(--accent-soft);
+        font-weight: 600;
+      }
+
+      .main {
+        display: grid;
+        gap: 2.75rem;
+        min-width: 0;
+      }
+
+      /* Score hero: the one dark, bold block on the page. */
+      .hero {
+        background: var(--hero-bg);
+        color: var(--hero-ink);
+        border-radius: 0.875rem;
+        padding: clamp(1.25rem, 3.5vw, 2.25rem);
+      }
+
+      .hero-title {
+        font-size: 0.95rem;
+        font-weight: 600;
+        color: var(--hero-muted);
+      }
+
+      .hero-grid {
+        display: grid;
+        grid-template-columns: minmax(0, 1fr);
+        gap: 1.75rem;
+        margin-top: 1rem;
+      }
+
+      .hero-num {
+        font-size: clamp(4.5rem, 16vw, 7.5rem);
+        line-height: 0.95;
+        font-weight: 750;
+        letter-spacing: -0.045em;
+        font-variant-numeric: tabular-nums;
+      }
+
+      .hero-num small {
+        font-size: 1rem;
+        font-weight: 600;
+        letter-spacing: 0;
+        color: var(--hero-muted);
+        margin-left: 0.5rem;
+      }
+
+      .hero-num.is-empty {
+        font-size: 2rem;
+        letter-spacing: 0;
+      }
+
+      .hero-label {
+        margin-top: 0.8rem;
+        font-size: 1.4rem;
+        font-weight: 700;
+      }
+
+      .hero-caption {
+        color: var(--hero-muted);
+      }
+
+      .hero-sentence {
+        margin-top: 0.9rem;
+        max-width: 36ch;
+        font-size: 1rem;
+      }
+
+      .subscores {
+        list-style: none;
+        margin: 0;
+        padding: 0;
+        display: grid;
+        gap: 1.1rem;
+        align-content: end;
+      }
+
+      .subscore-head {
+        display: flex;
+        justify-content: space-between;
+        align-items: baseline;
+        gap: 1rem;
+      }
+
+      .subscore-name {
+        font-weight: 600;
+      }
+
+      .subscore-value {
+        font-size: 1.4rem;
+        font-weight: 700;
+        font-variant-numeric: tabular-nums;
+      }
+
+      .subscore-value.is-text {
+        font-size: 1rem;
+        text-align: end;
+        overflow-wrap: anywhere;
+      }
+
+      .subscore-value small {
+        font-size: 0.85rem;
+        font-weight: 600;
+        color: var(--hero-muted);
+      }
+
+      .subscore-note {
+        margin-top: 0.15rem;
+        font-size: 0.88rem;
+        color: var(--hero-muted);
+      }
+
+      .hero .bar {
+        --track: var(--hero-track);
+        margin-top: 0.45rem;
+      }
+
+      .hero .bar > span {
+        background: var(--hero-accent);
+      }
+
+      /* Scale: 0 to 100 with the four bands. The marker shows where the score falls. */
+      .scale {
+        margin-top: 1.75rem;
+      }
+
+      .scale-track {
+        position: relative;
+        display: grid;
+        grid-template-columns: 40fr 20fr 20fr 20fr;
+        gap: 3px;
+        height: 0.6rem;
+      }
+
+      .scale-track > span {
+        background: var(--hero-track);
+        border-radius: 2px;
+      }
+
+      .scale-mark {
+        position: absolute;
+        top: -0.35rem;
+        bottom: -0.35rem;
+        width: 4px;
+        margin-left: -2px;
+        border-radius: 2px;
+        background: var(--hero-ink);
+        box-shadow: 0 0 0 2px var(--hero-bg);
+      }
+
+      .scale-labels {
+        list-style: none;
+        margin: 0.6rem 0 0;
+        padding: 0;
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        gap: 0.25rem 0.75rem;
+        font-size: 0.82rem;
+        color: var(--hero-muted);
+      }
+
+      .tally {
+        margin: 1.75rem 0 0;
+        padding-top: 1.25rem;
+        border-top: 1px solid var(--hero-track);
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        gap: 1rem;
+      }
+
+      .tally dt {
+        font-size: 0.85rem;
+        color: var(--hero-muted);
+      }
+
+      .tally dd {
+        margin: 0;
+        font-size: 1.6rem;
+        font-weight: 700;
+        font-variant-numeric: tabular-nums;
+      }
+
+      .hero-foot {
+        margin-top: 1.25rem;
+        font-size: 0.88rem;
+        color: var(--hero-muted);
+        max-width: 60ch;
+      }
+
+      /* Bars */
+      .bar {
+        --track: var(--line);
+        height: 0.5rem;
+        border-radius: 999px;
+        background: var(--track);
+        overflow: hidden;
+      }
+
+      .bar > span {
+        display: block;
+        height: 100%;
+        border-radius: inherit;
+        background: var(--accent);
+      }
+
+      /* Blocks */
+      .block {
+        border-top: 1px solid var(--line);
+        padding-top: 1.75rem;
+      }
+
+      .block-head {
+        display: grid;
+        gap: 0.35rem;
+      }
+
+      .block-sub {
+        color: var(--muted);
+        max-width: 68ch;
+      }
+
+      .block-body {
+        margin-top: var(--s-5);
+        display: grid;
+        gap: var(--s-6);
+        min-width: 0;
+      }
+
+      .sub-title {
+        margin: 0;
+      }
+
+      .reading {
+        display: grid;
+        grid-template-columns: minmax(0, 1fr);
+        gap: var(--s-6);
+        min-width: 0;
+      }
+
+      .reading > div > h3,
+      .reading > h3 {
+        margin-bottom: var(--s-3);
+      }
+
+      .prose {
+        max-width: 68ch;
+      }
+
+      /* Component parts */
+      .parts {
+        list-style: none;
+        margin: 0;
+        padding: 0;
+        display: grid;
+        gap: 0.9rem;
+      }
+
+      .part-head {
+        display: flex;
+        justify-content: space-between;
+        gap: 1rem;
+        font-weight: 600;
+      }
+
+      .part-val {
+        font-variant-numeric: tabular-nums;
+      }
+
+      .part-meta {
+        margin-top: 0.2rem;
+        font-size: 0.85rem;
+        color: var(--muted);
+        text-wrap: pretty;
+      }
+
+      .callouts {
+        list-style: none;
+        margin: 0;
+        padding: 0;
+        display: grid;
+        gap: 0.6rem;
+      }
+
+      .callout {
+        display: flex;
+        gap: 0.7rem;
+        align-items: flex-start;
+        padding: 0.7rem 0.9rem;
+        border: 1px solid var(--fail-line);
+        border-radius: 0.6rem;
+        background: var(--fail-soft);
+      }
+
+      .callout p {
+        margin: 0;
+      }
+
+      /* Glyphs and marks: the shape and the word carry severity, color only reinforces it. */
+      .glyph {
+        flex: 0 0 auto;
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        width: 1.5rem;
+        height: 1.5rem;
+        border-radius: 0.375rem;
+        border: 1px solid var(--line);
+        background: var(--sunk);
+        color: var(--ink);
+        font-size: 0.85rem;
+        font-weight: 800;
+        line-height: 1;
+      }
+
+      .glyph.fail {
+        color: var(--fail);
+        background: var(--fail-soft);
+        border-color: var(--fail-line);
+      }
+
+      .glyph.warn {
+        color: var(--warn);
+        background: var(--warn-soft);
+        border-color: var(--warn-line);
+      }
+
+      .glyph.ok {
+        color: var(--ok);
+        background: var(--ok-soft);
+        border-color: var(--ok-line);
+      }
+
+      .glyph.info {
+        color: var(--info);
+        background: var(--info-soft);
+        border-color: var(--info-line);
+      }
+
+      .mark {
+        display: inline-flex;
+        align-items: center;
+        gap: 0.4rem;
+        font-weight: 600;
+        font-size: 0.9rem;
+        white-space: nowrap;
+        color: var(--ink);
+      }
+
+      .mark.fail {
+        color: var(--fail);
+      }
+
+      .mark.warn {
+        color: var(--warn);
+      }
+
+      .mark.ok {
+        color: var(--ok);
+      }
+
+      .mark.info {
+        color: var(--info);
+      }
+
+      /* Diagnosis: two columns on wide screens, one on narrow. */
+      .split {
+        display: grid;
+        grid-template-columns: minmax(0, 1fr);
+        gap: 2rem;
+      }
+
+      .items {
+        list-style: none;
+        margin: 0;
+        padding: 0;
+        display: grid;
+        gap: var(--s-4);
+      }
+
+      .item {
+        border-left: 3px solid var(--line-strong);
+        padding-left: 1rem;
+      }
+
+      .item.fail {
+        border-left-color: var(--fail);
+      }
+
+      .item.warn {
+        border-left-color: var(--warn);
+      }
+
+      .item-head {
+        display: flex;
+        flex-wrap: wrap;
+        align-items: center;
+        gap: 0.6rem;
+      }
+
+      .ids {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 0.3rem;
+        margin-top: 0.35rem;
+      }
+
+      .item p {
+        margin-top: 0.35rem;
+        max-width: 68ch;
+      }
+
+      .evidence {
+        font-size: 0.85rem;
+        color: var(--muted);
+      }
+
+      blockquote {
+        margin: 0.6rem 0 0;
+        padding: 0.1rem 0 0.1rem 0.9rem;
+        border-left: 2px solid var(--line-strong);
+        color: var(--ink);
+        max-width: 68ch;
+      }
+
+      blockquote p {
+        margin: 0;
+      }
+
+      /* Priority: a real sequence, so the markers are numbers. */
+      .steps {
+        margin: 0;
+        padding-left: 1.6rem;
+        display: grid;
+        gap: 1rem;
+        max-width: 68ch;
+      }
+
+      .steps li::marker {
+        color: var(--accent);
+        font-weight: 700;
+      }
+
+      .step-title {
+        font-weight: 600;
+      }
+
+      .step-title a {
+        color: var(--ink);
+      }
+
+      /* Findings */
+      .tools {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 1rem 1.5rem;
+        align-items: flex-end;
+        padding: 1rem;
+        background: var(--sunk);
+        border-radius: 0.6rem;
+      }
+
+      .tool-label {
+        display: block;
+        margin-bottom: 0.4rem;
+        font-size: 0.88rem;
+        font-weight: 600;
+        color: var(--muted);
+      }
+
+      .segmented {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 0.35rem;
+      }
+
+      .segmented button[aria-pressed='true'] {
+        background: var(--ink);
+        border-color: var(--ink);
+        color: var(--surface);
+      }
+
+      input[type='search'] {
+        font: inherit;
+        font-size: 0.95rem;
+        color: var(--ink);
+        background: var(--surface);
+        border: 1px solid var(--line-strong);
+        border-radius: 0.5rem;
+        min-height: 2.5rem;
+        width: min(100%, 20rem);
+        padding: 0.4rem 0.75rem;
+      }
+
+      .count-line {
+        font-size: 0.9rem;
+        color: var(--muted);
+        margin-top: 0.75rem;
+      }
+
+      /* Findings: one card per finding, built from the action card classes (.action). */
+      .group {
+        display: grid;
+        gap: var(--s-3);
+        min-width: 0;
+      }
+
+      .group-head {
+        display: flex;
+        flex-wrap: wrap;
+        align-items: baseline;
+        justify-content: space-between;
+        gap: var(--s-1) var(--s-4);
+        padding-bottom: var(--s-2);
+        border-bottom: 1px solid var(--line);
+      }
+
+      .group-count {
+        font-size: 0.88rem;
+        color: var(--muted);
+        font-variant-numeric: tabular-nums;
+      }
+
+      .rows {
+        display: grid;
+        gap: var(--s-2);
+        min-width: 0;
+      }
+
+      .row-main {
+        display: grid;
+        gap: var(--s-1);
+        min-width: 0;
+      }
+
+      .row-title {
+        font-weight: 600;
+        overflow-wrap: anywhere;
+      }
+
+      /* The id pill sits under the title and is only as wide as its text. */
+      .row-id {
+        justify-self: start;
+        max-width: 100%;
+        padding: 0.05em 0.4em;
+        border-radius: 0.25rem;
+        background: var(--sunk);
+        font-family: var(--font-mono);
+        font-size: 0.8rem;
+        color: var(--muted);
+        overflow-wrap: anywhere;
+      }
+
+      .row-meta {
+        font-size: 0.88rem;
+        color: var(--muted);
+      }
+
+      /* Open finding: the key/value list belongs to the card. It runs edge to edge inside the card border, with no box of its own. */
+      .action.finding {
+        overflow: hidden;
+      }
+
+      .action.finding > div {
+        padding: 0;
+      }
+
+      .action.finding .fields {
+        border: 0;
+        border-top: 1px solid var(--line);
+        border-radius: 0;
+        background: none;
+      }
+
+      .chev {
+        width: 0.45rem;
+        height: 0.45rem;
+        border-right: 2px solid var(--muted);
+        border-bottom: 2px solid var(--muted);
+        transform: rotate(-45deg);
+        margin-right: 0.3rem;
+        transition: transform 180ms ease-out;
+      }
+
+      details[open] > summary .chev {
+        transform: rotate(45deg);
+      }
+
+      /* Actions */
+      .action {
+        border: 1px solid var(--line);
+        border-radius: 0.6rem;
+        background: var(--surface);
+      }
+
+      .action > summary {
+        display: grid;
+        grid-template-columns: auto minmax(0, 1fr) auto auto;
+        align-items: center;
+        gap: 0.25rem 0.8rem;
+        min-height: 2.9rem;
+        padding: 0.7rem 0.9rem;
+        cursor: pointer;
+        list-style: none;
+        border-radius: 0.6rem;
+        transition: background-color 150ms ease-out;
+      }
+
+      .action > summary::-webkit-details-marker {
+        display: none;
+      }
+
+      .action > summary:hover {
+        background: var(--sunk);
+      }
+
+      .action[open] {
+        border-color: var(--line-strong);
+      }
+
+      .action > div {
+        padding: 0 0.9rem 1rem;
+        display: grid;
+        gap: 0.9rem;
+      }
+
+      .fields-label {
+        margin-bottom: 0.3rem;
+        font-size: 0.85rem;
+        font-weight: 600;
+        color: var(--muted);
+      }
+
+      pre {
+        font-family: var(--font-mono);
+        font-size: 0.85rem;
+        line-height: 1.5;
+        background: var(--sunk);
+        border: 1px solid var(--line);
+        border-radius: 0.5rem;
+        margin: 0.5rem 0 0;
+        padding: 0.8rem 1rem;
+        overflow-x: auto;
+        white-space: pre;
+        max-width: 100%;
+      }
+
+      pre code {
+        background: none;
+        padding: 0;
+        font-size: inherit;
+      }
+
+      /* Key/value rows: one row per pair, zebra striped. Label above value on narrow screens, side by side from 40rem. */
+      .facts,
+      .fields {
+        display: grid;
+        margin: 0;
+        border: 1px solid var(--line);
+        border-radius: 0.6rem;
+        background: var(--surface);
+        overflow: hidden;
+      }
+
+      .facts > div,
+      .fields > div {
+        display: grid;
+        gap: var(--s-1);
+        padding: var(--s-3) var(--s-4);
+        min-width: 0;
+      }
+
+      .facts > div:nth-child(even),
+      .fields > div:nth-child(even) {
+        background: var(--zebra);
+      }
+
+      .facts dt,
+      .fields dt {
+        font-size: 0.9rem;
+        font-weight: 600;
+        color: var(--muted);
+      }
+
+      .facts dd,
+      .fields dd {
+        margin: 0;
+        max-width: 68ch;
+        color: var(--ink);
+        overflow-wrap: anywhere;
+        font-variant-numeric: tabular-nums;
+      }
+
+      @media (min-width: 40rem) {
+        .facts > div,
+        .fields > div {
+          grid-template-columns: minmax(7rem, 10rem) minmax(0, 1fr);
+          column-gap: var(--s-5);
+          align-items: baseline;
+        }
+      }
+
+      /* Tables: wrap in a scroller. Narrow screens stack each row as a labeled block. */
+      .scroller {
+        overflow-x: auto;
+        border: 1px solid var(--line);
+        border-radius: 0.6rem;
+        background: var(--surface);
+      }
+
+      table {
+        width: 100%;
+        border-collapse: collapse;
+        font-size: 0.93rem;
+        font-variant-numeric: tabular-nums;
+      }
+
+      caption {
+        caption-side: top;
+        text-align: start;
+        font-weight: 600;
+        padding: 0.7rem 0.9rem;
+        background: var(--sunk);
+        border-bottom: 1px solid var(--line);
+      }
+
+      th,
+      td {
+        text-align: start;
+        vertical-align: top;
+        padding: 0.6rem 0.9rem;
+        border-bottom: 1px solid var(--line);
+        overflow-wrap: anywhere;
+      }
+
+      tbody tr:last-child td {
+        border-bottom: 0;
+      }
+
+      thead th {
+        font-size: 0.85rem;
+        font-weight: 600;
+        color: var(--muted);
+        background: var(--sunk);
+        white-space: nowrap;
+        border-bottom: 1px solid var(--line-strong);
+      }
+
+      .lines {
+        list-style: none;
+        margin: 0;
+        padding: 0;
+        display: grid;
+      }
+
+      .lines li {
+        padding: 0.6rem 0;
+        border-bottom: 1px solid var(--line);
+        max-width: 68ch;
+      }
+
+      .lines li:last-child {
+        border-bottom: 0;
+      }
+
+      /* Heading outline: indent H2 and H3 under the level above. */
+      .outline li[data-level='2'] {
+        padding-left: 1.25rem;
+      }
+
+      .outline li[data-level='3'] {
+        padding-left: 2.5rem;
+      }
+
+      .divider-head {
+        padding-top: 0.25rem;
+      }
+
+      .divider-head h2 {
+        font-size: 1.5rem;
+      }
+
+      /* Spacing: sub-sections, group headings, and the Diagnosis columns. Headings sit closer to their own content than to the previous block. */
+      .sub {
+        display: grid;
+        gap: var(--s-3);
+        min-width: 0;
+      }
+
+      .kv-group {
+        display: grid;
+        gap: var(--s-2);
+        min-width: 0;
+      }
+
+      .kv-group h4 {
+        font-size: 0.95rem;
+        font-weight: 700;
+      }
+
+      .kv-group + .kv-group {
+        margin-top: var(--s-5);
+      }
+
+      .split h3 {
+        margin-bottom: var(--s-4);
+      }
+
+      /* Tables share the zebra tint. Stacked rows on narrow screens take the tint on the row. */
+      tbody tr:nth-child(even) td {
+        background: var(--zebra);
+      }
+
+      @media (max-width: 40rem) {
+        table.stack tbody tr:nth-child(even) {
+          background: var(--zebra);
+        }
+
+        table.stack tbody tr:nth-child(even) td {
+          background: transparent;
+        }
+      }
+
+      /* Navigation and motion. Motion answers a user action only: section jump, accordion, filter, theme. */
+      .block,
+      .hero,
+      .action {
+        scroll-margin-top: calc(var(--nav-h, 0px) + env(safe-area-inset-top, 0px) + 1.25rem);
+      }
+
+      h1,
+      h2,
+      h3 {
+        text-wrap: balance;
+      }
+
+      .prose,
+      .hero-sentence,
+      .hero-foot,
+      .item p,
+      .hero-num,
+      .subscore-value,
+      .tally dd,
+      .part-val,
+      .count-line,
+      h2[tabindex='-1']:focus-visible {
+        outline-offset: 6px;
+        border-radius: 0.25rem;
+      }
+
+      .toc a {
+        transition:
+          background-color 150ms ease-out,
+          color 150ms ease-out,
+          border-color 150ms ease-out;
+      }
+
+      /* Desktop: a thin accent bar marks the current section. */
+      @media (min-width: 60rem) {
+        .toc a::before {
+          content: '';
+          position: absolute;
+          left: 0;
+          top: 0.55rem;
+          bottom: 0.55rem;
+          width: 2px;
+          border-radius: 2px;
+          background: var(--accent);
+          transform: scaleY(0);
+          transition: transform 180ms ease-out;
+        }
+
+        .toc a[aria-current='true']::before {
+          transform: scaleY(1);
+        }
+      }
+
+      /* Narrow screens: the section list is one sticky, horizontally scrollable row under the top edge. */
+      @media (max-width: 59.99rem) {
+        .toc {
+          position: sticky;
+          top: env(safe-area-inset-top, 0px);
+          z-index: 5;
+          flex-wrap: nowrap;
+          overflow-x: auto;
+          overscroll-behavior-x: contain;
+          scroll-padding-inline: 1rem;
+          scrollbar-width: none;
+          padding-block: 0.5rem;
+          padding-inline: 0.25rem;
+          background: var(--bg);
+          border-bottom: 1px solid var(--line);
+        }
+
+        .toc::-webkit-scrollbar {
+          display: none;
+        }
+
+        .toc-group {
+          display: none;
+        }
+
+        .toc a {
+          flex: 0 0 auto;
+        }
+      }
+
+      @media (prefers-reduced-motion: no-preference) {
+        html {
+          scroll-behavior: smooth;
+        }
+      }
+
+      @media (min-width: 40rem) {
+        .hero-grid {
+          grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+          align-items: end;
+        }
+
+        .tally {
+          grid-template-columns: repeat(4, minmax(0, 1fr));
+        }
+
+        .scale-labels {
+          grid-template-columns: 40fr 20fr 20fr 20fr;
+        }
+
+        .split {
+          grid-template-columns: repeat(2, minmax(0, 1fr));
+        }
+
+        .action > summary {
+          grid-template-columns: auto minmax(0, 1fr) auto auto;
+        }
+      }
+
+      @media (min-width: 60rem) {
+        .layout {
+          grid-template-columns: 13.5rem minmax(0, 1fr);
+          gap: 3.5rem;
+          align-items: start;
+        }
+
+        .toc {
+          position: sticky;
+          top: calc(env(safe-area-inset-top, 0px) + 1.25rem);
+          max-height: calc(100vh - 2.5rem);
+          max-height: calc(100dvh - 2.5rem);
+          overflow-y: auto;
+          overscroll-behavior: contain;
+          align-self: start;
+          flex-direction: column;
+          align-items: stretch;
+          flex-wrap: nowrap;
+          gap: 0.1rem;
+        }
+
+        .toc-group {
+          flex: none;
+          margin-top: 1.1rem;
+        }
+
+        .toc-group:first-child {
+          margin-top: 0;
+        }
+
+        .toc a {
+          border-color: transparent;
+          background: transparent;
+          padding-inline: 0.7rem;
+        }
+
+        .toc a:hover {
+          border-color: transparent;
+          background: var(--sunk);
+        }
+
+        .toc a[aria-current='true'] {
+          border-color: transparent;
+          background: var(--accent-soft);
+        }
+
+        .hero-grid {
+          gap: 3rem;
+        }
+
+        .reading {
+          grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+          align-items: start;
+        }
+
+        .reading > .context {
+          grid-column: 1 / -1;
+        }
+      }
+
+      @media (max-width: 40rem) {
+        table.stack thead {
+          position: absolute;
+          width: 1px;
+          height: 1px;
+          overflow: hidden;
+          clip: rect(0 0 0 0);
+        }
+
+        table.stack,
+        table.stack tbody,
+        table.stack tr,
+        table.stack td {
+          display: block;
+          width: 100%;
+        }
+
+        table.stack caption {
+          display: block;
+        }
+
+        table.stack tr {
+          padding: 0.6rem 0.9rem;
+          border-bottom: 1px solid var(--line);
+        }
+
+        table.stack tr:last-child {
+          border-bottom: 0;
+        }
+
+        table.stack td {
+          display: grid;
+          grid-template-columns: minmax(0, 7rem) minmax(0, 1fr);
+          gap: 0.5rem;
+          border: 0;
+          padding: 0.2rem 0;
+        }
+
+        table.stack td::before {
+          content: attr(data-label);
+          font-size: 0.85rem;
+          color: var(--muted);
+        }
+      }
+
+      @media print {
+        .masthead,
+        .toc,
+        .tools,
+        .count-line,
+        .theme,
+        .skip {
+          display: none !important;
+        }
+
+        .layout {
+          display: block;
+        }
+
+        .hero {
+          --hero-bg: #ffffff;
+          --hero-ink: #111827;
+          --hero-muted: #374151;
+          --hero-track: #d1d5db;
+          --hero-accent: #111827;
+          border: 1px solid #9ca3af;
+        }
+
+        .block,
+        .item,
+        .callout,
+        .facts > div,
+        details.action {
+          break-inside: avoid;
+        }
+
+        a {
+          color: inherit;
+          text-decoration: none;
+        }
+      }
+
+      @media (prefers-reduced-motion: reduce) {
+        * {
+          scroll-behavior: auto !important;
+          transition-duration: 0.01ms !important;
+          animation-duration: 0.01ms !important;
+        }
+
+        button:active:not(:disabled) {
+          transform: none;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <a class="skip" id="skip" href="#readiness" hidden>Skip to the score</a>
+    <header class="masthead">
+      <div class="wrap masthead-in">
+        <div class="brand">
+          <span class="brand-logo" aria-hidden="true">
+            <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
+              <rect width="64" height="64" rx="14" fill="#0B1220" />
+              <g transform="translate(32 32) scale(0.78) translate(-32 -32)">
+                <circle cx="26" cy="26" r="20" fill="none" stroke="#FFFFFF" stroke-width="4" />
+                <defs>
+                  <clipPath id="su-lens-rev"><circle cx="26" cy="26" r="18" /></clipPath>
+                </defs>
+                <g clip-path="url(#su-lens-rev)">
+                  <rect x="14" y="28" width="6" height="12" rx="1.5" fill="#60A5FA" />
+                  <rect x="23" y="22" width="6" height="18" rx="1.5" fill="#22D3EE" />
+                  <rect x="32" y="14" width="6" height="26" rx="1.5" fill="#34D399" />
+                </g>
+                <rect
+                  x="40"
+                  y="40"
+                  width="22"
+                  height="7"
+                  rx="3.5"
+                  transform="rotate(45 40 40)"
+                  fill="#FFFFFF"
+                />
+              </g>
+            </svg>
+          </span>
+          <span>Search<span>Unit</span> audit</span>
+        </div>
+        <button
+          type="button"
+          id="theme"
+          class="theme"
+          aria-pressed="false"
+          aria-label="Switch to the dark theme"
+        >
+          <span class="theme-icons" aria-hidden="true">
+            <svg class="i-moon" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256">
+              <path
+                d="M108.11,28.11A96.09,96.09,0,0,0,227.89,147.89,96,96,0,1,1,108.11,28.11Z"
+                fill="none"
+                stroke="currentColor"
+                stroke-linecap="round"
+                stroke-linejoin="round"
+                stroke-width="16"
+              />
+            </svg>
+            <svg class="i-sun" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256">
+              <circle
+                cx="128"
+                cy="128"
+                r="56"
+                fill="none"
+                stroke="currentColor"
+                stroke-width="16"
+              />
+              <path
+                d="M128 32v-8M128 232v-8M32 128h-8M232 128h-8M59.4 59.4l-5.7-5.7M202.3 202.3l-5.7-5.7M59.4 196.6l-5.7 5.7M202.3 53.7l-5.7 5.7"
+                fill="none"
+                stroke="currentColor"
+                stroke-linecap="round"
+                stroke-width="16"
+              />
+            </svg>
+          </span>
+        </button>
+      </div>
+    </header>
+    <main class="wrap">
+      <header class="page-head">
+        <h1 class="page-url" id="target">No URL open.</h1>
+        <div class="page-meta">
+          <span id="fetched-at">Date and time appear with the report.</span>
+          <span class="chip" id="pill-command" hidden></span>
+          <span class="chip" id="pill-crux" hidden></span>
+          <span class="chip warn" id="notice" hidden></span>
+        </div>
+      </header>
+      <p id="status" class="status" role="status"></p>
+      <div id="report" hidden></div>
+      <noscript>
+        <p class="status">This report needs JavaScript to build the sections.</p>
+      </noscript>
+    </main>
+    <script type="application/json" id="audit-data"></script>
+    <script>
+      const LABEL = {
+        Excellent: 'Excellent',
+        Good: 'Good',
+        Moderate: 'Moderate',
+        'Below Average': 'Below average',
+        'Needs Attention': 'Needs attention',
+      };
+      const CONF = { high: 'high', medium: 'medium', low: 'low' };
+      const EV = {
+        direct: 'direct',
+        mixed: 'mixed',
+        indirect: 'indirect',
+        lab: 'lab',
+        inferred: 'inferred',
+        insufficient: 'insufficient',
+      };
+      const SEV = {
+        fail: ['Fail', 'fail', '×'],
+        warn: ['Warning', 'warn', '!'],
+        pass: ['Ok', 'ok', '✓'],
+        info: ['Note', 'info', 'i'],
+      };
+      const GROUP = {
+        'critical-blocker': 'Critical blockers',
+        'security-headers': 'Security headers',
+        'llms-full': 'llms-full.txt',
+        llms: 'llms.txt',
+        crawlers: 'Crawlers',
+        citability: 'Citability',
+        platform: 'Platform',
+        content: 'Content',
+        discover: 'Discover',
+        speakable: 'Speakable',
+        meta: 'Meta',
+      };
+
+      const EXAMPLE = {
+        example: true,
+        url: 'https://www.test.com/',
+        fetchedAt: '2026-09-30T22:14:00-03:00',
+        headline: { value: 60, label: 'Moderate', caption: 'Overall readiness' },
+        seo: { value: 56, label: 'Moderate' },
+        geo: { value: 64, label: 'Moderate' },
+        confidence: 'low',
+        evidenceQuality: 'mixed',
+        cruxAvailable: false,
+        cruxNote:
+          'No CrUX key. Set CRUX_API_KEY to add field Core Web Vitals to the technical score.',
+        context: [
+          { label: 'Scope', value: 'Page' },
+          { label: 'Market', value: 'Country, language' },
+          { label: 'Sample', value: '1 URL, page template' },
+          { label: 'Evidence', value: 'CLI audit' },
+          { label: 'Search Console', value: 'not used' },
+        ],
+        breakdown: [
+          { name: 'AI citability', score: 62, weight: 0.3125, evidence: 'lab' },
+          { name: 'Content quality (E-E-A-T)', score: 58, weight: 0.25, evidence: 'direct' },
+          { name: 'Technical foundations', score: 74, weight: 0.1875, evidence: 'lab' },
+          { name: 'Structured data', score: 25, weight: 0.125, evidence: 'direct' },
+          { name: 'Platform optimization', score: 70, weight: 0.125, evidence: 'lab' },
+        ],
+        blockers: [{ id: 'no_structured_data', component: 'structured_data', cap: 25 }],
+        wrong: [
+          {
+            title: 'The page has no JSON-LD',
+            evidence: 'direct',
+            severity: 'critical',
+            ids: ['blocker:no_structured_data', 'schema:jsonld'],
+            affected: 'https://www.test.com/',
+            text: 'The page has no JSON-LD. Blocker no_structured_data caps structured data at 25.',
+          },
+          {
+            title: 'The title is 38 characters',
+            evidence: 'direct',
+            severity: 'high',
+            ids: ['meta:title'],
+            affected: 'https://www.test.com/',
+            text: 'The title is 38 characters, outside the 50 to 60 band. The H1 is a different sentence.',
+            quote: 'Test page',
+          },
+        ],
+        improve: [
+          {
+            title: 'HSTS is absent from the response',
+            evidence: 'direct',
+            severity: 'medium',
+            ids: ['security:strict-transport-security'],
+            affected: 'https://www.test.com/',
+            text: 'The response does not send HSTS. HSTS is absent, and that header moves the technical component the same way the other four do.',
+          },
+        ],
+        priority: [
+          {
+            action: 'p1',
+            title: 'The page has no JSON-LD',
+            severity: 'critical',
+            ids: ['blocker:no_structured_data'],
+            text: 'Blocker no_structured_data caps structured data at 25.',
+          },
+          {
+            action: 'p2',
+            title: 'The title is 38 characters',
+            severity: 'high',
+            ids: ['meta:title'],
+            text: 'The title is 38 characters and does not repeat the H1.',
+          },
+        ],
+        findings: [
+          {
+            id: 'schema:jsonld',
+            source: 'schema',
+            severity: 'fail',
+            title: 'JSON-LD',
+            detail: 'no application/ld+json blocks',
+          },
+          {
+            id: 'speakable:jsonld',
+            source: 'speakable',
+            severity: 'info',
+            title: 'Speakable',
+            detail: 'missing (optional)',
+          },
+          {
+            id: 'meta:title',
+            source: 'meta',
+            severity: 'fail',
+            title: 'Title',
+            detail: '38 characters. The judgment band is 50 to 60.',
+          },
+          {
+            id: 'meta:description',
+            source: 'meta',
+            severity: 'pass',
+            title: 'Meta description',
+            detail: 'Present, 86 characters.',
+          },
+          {
+            id: 'content:author',
+            source: 'content',
+            severity: 'warn',
+            title: 'Author',
+            detail: 'missing',
+          },
+          {
+            id: 'crawlers:Googlebot',
+            source: 'crawlers',
+            severity: 'pass',
+            title: 'Googlebot',
+            detail: 'allowed, live-retrieval gate (search)',
+          },
+          {
+            id: 'citability:citation-ready',
+            source: 'citability',
+            severity: 'info',
+            title: 'Citation-ready blocks',
+            detail: 'There is no direct block of one to three sentences.',
+          },
+          {
+            id: 'security:strict-transport-security',
+            source: 'security-headers',
+            severity: 'info',
+            title: 'HSTS',
+            detail: 'Absent.',
+          },
+        ],
+        actions: [
+          {
+            id: 'p1',
+            title: 'Publish JSON-LD for the type the page shows',
+            severity: 'critical',
+            phase: '1',
+            effort: 'S',
+            impact: 'high',
+            owner: 'dev',
+            source: 'blocker:no_structured_data',
+            location: 'Head of https://www.test.com/',
+            current: 'no JSON-LD',
+            target: 'one JSON-LD block with the type the visible sentence confirms',
+            fix: 'Put JSON-LD in the HTML with the type the visible sentence confirms. Use only facts already on the page.',
+            fixKind: 'schema',
+            example:
+              '{\n  "@context": "https://schema.org",\n  "@type": "Article",\n  "headline": "Test page",\n  "inLanguage": "en"\n}',
+            verify:
+              'searchunit audit "https://www.test.com/" --agent --silent. Blocker no_structured_data is gone.',
+            open: true,
+          },
+          {
+            id: 'p2',
+            title: 'Rewrite the title into the 50 to 60 character band',
+            severity: 'high',
+            phase: '1',
+            effort: 'S',
+            impact: 'medium',
+            owner: 'content',
+            source: 'meta:title',
+            location: 'Title of the page template',
+            current: '38 characters',
+            target: '50 to 60 characters that say the same thing as the H1',
+            fix: 'Replace the title with a 50 to 60 character sentence that says the same thing as the H1.',
+            fixKind: 'content',
+            verify:
+              'searchunit seo-check "https://www.test.com/" --agent --silent. Finding meta:title is pass.',
+            open: false,
+          },
+          {
+            id: 'p3',
+            title: 'Send HSTS on the response',
+            severity: 'medium',
+            phase: '2',
+            effort: 'M',
+            impact: 'medium',
+            owner: 'dev',
+            source: 'security:strict-transport-security',
+            location: 'Response headers of the HTTPS origin',
+            current: 'absent',
+            target: 'Strict-Transport-Security: max-age=31536000',
+            fix: 'Send Strict-Transport-Security on the HTTPS origin. When the whole host is HTTPS, include includeSubDomains.',
+            fixKind: 'header',
+            example: 'Strict-Transport-Security: max-age=31536000; includeSubDomains',
+            verify:
+              'searchunit audit "https://www.test.com/" --agent --silent. Finding security:strict-transport-security is pass.',
+            open: false,
+          },
+        ],
+        sample: [{ url: 'https://www.test.com/', template: 'page', status: '200' }],
+        sampleSentence: 'URLs outside this sample were not read.',
+        page: [
+          { label: 'Final URL', value: 'https://www.test.com/' },
+          { label: 'Status', value: '200' },
+          { label: 'Bytes', value: '48.000' },
+          { label: 'Page type', value: 'Article' },
+          { label: 'Site type', value: 'Content' },
+          { label: 'Title', value: 'Test page' },
+          { label: 'Meta description', value: 'A short test sentence for the meta description.' },
+          { label: 'H1', value: 'Test page' },
+          { label: 'Canonical', value: 'https://www.test.com/' },
+          { label: 'Language', value: 'en' },
+          { label: 'Viewport', value: 'yes' },
+          { label: 'Words', value: '420' },
+          { label: 'H2 / H3', value: '4 / 2' },
+          { label: 'Paragraphs, lists, tables', value: '6, 1, 0' },
+          { label: 'Images missing alt', value: '1 of 3' },
+          { label: 'Dates', value: 'absent' },
+          { label: 'Author', value: 'absent' },
+          { label: 'Rendering', value: 'The content is in the HTML.' },
+        ],
+        sitemap: [
+          { label: 'Status', value: 'present' },
+          { label: 'URLs', value: '1' },
+          { label: 'Audited URL listed', value: 'yes' },
+        ],
+        llms: [
+          { label: 'Status', value: 'absent' },
+          { label: 'Score weight', value: 'If it is missing, the score does not change.' },
+        ],
+        redirects: [
+          { label: 'Hops', value: '1' },
+          { label: 'HTTP to HTTPS', value: 'yes' },
+          {
+            label: 'Chain',
+            value: 'http://www.test.com/, https://www.test.com/',
+          },
+        ],
+        crux: [
+          {
+            label: 'Status',
+            value:
+              'CrUX is out. Without a key, the technical score does not include Core Web Vitals.',
+          },
+        ],
+        crawlers: [
+          { bot: 'Search bot', status: 'allowed', role: 'search' },
+          { bot: 'Training bot', status: 'blocked', role: 'training' },
+        ],
+        headers: [
+          {
+            name: 'HSTS',
+            state: 'absent',
+            effect: 'absent',
+            tone: '',
+          },
+          {
+            name: 'CSP',
+            state: 'absent',
+            effect: 'absent',
+            tone: '',
+          },
+          {
+            name: 'X-Frame-Options',
+            state: 'present',
+            effect: 'present',
+            tone: 'ok',
+          },
+          {
+            name: 'X-Content-Type-Options',
+            state: 'present',
+            effect: 'present',
+            tone: '',
+          },
+          {
+            name: 'Referrer-Policy',
+            state: 'absent',
+            effect: 'absent',
+            tone: '',
+          },
+          { name: 'X-Robots-Tag', state: 'absent', effect: 'absent', tone: '' },
+        ],
+        profile: [
+          { label: 'Domain', value: 'www.test.com' },
+          { label: 'Apex', value: 'test.com' },
+          { label: 'Subdomain', value: 'yes' },
+          {
+            label: 'Profile URL',
+            value: 'https://www.test.com/',
+            href: 'https://www.test.com/',
+          },
+        ],
+        gsc: 'Search Console did not enter. Reason: no-property. Evidence limitation: insufficient.',
+        limits: [
+          'Backlinks: insufficient. This run has no off-page source.',
+          'Crawl logs: insufficient. This run has no server logs.',
+          'CrUX: insufficient. cruxApiKeyAvailable is false.',
+          'Observed citations: insufficient. This run has no pasted platform test.',
+          'GBP/NAP: not observed. The business type is not local.',
+          'Conversions: insufficient. This run does not read analytics.',
+        ],
+        multimodal:
+          'Web: multimodal has no rows in this reading. That figure is observed traffic. Image and video in the HTML stay on the other check.',
+        measurement:
+          'In the HTML, image, video, infographic, and transcript sit on multimodal-citability. Web: multimodal is observed traffic, kept apart.',
+        reputation: 'The sample does not show third-party content on the host.',
+        validation: [
+          {
+            command: 'searchunit audit "https://www.test.com/" --agent --silent',
+            check: 'p1: blocker no_structured_data is gone.',
+          },
+          {
+            command: 'searchunit seo-check "https://www.test.com/" --agent --silent',
+            check: 'p2: finding meta:title is pass.',
+          },
+        ],
+      };
+
+      const reportRoot = document.querySelector('#report');
+      const statusNode = document.querySelector('#status');
+      const fetchedAtNode = document.querySelector('#fetched-at');
+      const targetNode = document.querySelector('#target');
+      const noticeNode = document.querySelector('#notice');
+      const commandPill = document.querySelector('#pill-command');
+      const pillCrux = document.querySelector('#pill-crux');
+      const skipLink = document.querySelector('#skip');
+      const themeBtn = document.querySelector('#theme');
+
+      function esc(value) {
+        return String(value ?? '')
+          .replaceAll('&', '&amp;')
+          .replaceAll('<', '&lt;')
+          .replaceAll('>', '&gt;')
+          .replaceAll('"', '&quot;');
+      }
+
+      function safeHref(url) {
+        try {
+          const parsed = new URL(url);
+          if (parsed.protocol === 'https:' || parsed.protocol === 'http:') return parsed.href;
+        } catch {
+          return '';
+        }
+        return '';
+      }
+
+      function labelOf(value) {
+        if (!value) return '';
+        return LABEL[value] || String(value);
+      }
+
+      function evidenceOf(value) {
+        if (!value) return '';
+        return EV[value] || String(value);
+      }
+
+      function formatWhen(iso) {
+        const date = new Date(iso);
+        if (Number.isNaN(date.getTime())) return 'Invalid date';
+        return new Intl.DateTimeFormat(document.documentElement.lang || 'en', {
+          dateStyle: 'long',
+          timeStyle: 'short',
+        }).format(date);
+      }
+
+      function formatNum(value) {
+        if (value === null || value === undefined || value === '') return 'no score';
+        const number = Number(value);
+        if (Number.isNaN(number)) return esc(value);
+        return new Intl.NumberFormat(document.documentElement.lang || 'en', {
+          maximumFractionDigits: 4,
+        }).format(number);
+      }
+
+      function scoreText(value) {
+        if (value === null || value === undefined || Number.isNaN(Number(value))) return 'no score';
+        return String(Math.round(Number(value)));
+      }
+
+      function clampPct(value) {
+        const n = Number(value);
+        if (Number.isNaN(n)) return 0;
+        return Math.max(0, Math.min(100, n));
+      }
+
+      function groupLabel(source) {
+        const name = String(source || 'other');
+        if (name === 'schema' || name.startsWith('schema:')) return 'Schema';
+        if (GROUP[name]) return GROUP[name];
+        const text = name.replaceAll(/[-_]/g, ' ');
+        return text.charAt(0).toUpperCase() + text.slice(1);
+      }
+
+      function catalogRole(bot, findings) {
+        const row = (findings || []).find((item) => item && item.id === `crawlers:${bot}`);
+        const detail = String((row && row.detail) || '');
+        const match = detail.match(/\((search|training|assistant)\)\s*$/);
+
+        return match ? match[1] : 'other';
+      }
+
+      function crawlerState(status) {
+        if (status === 'allowed') return ['allowed', 'ok'];
+        if (status === 'blocked') return ['blocked', 'fail'];
+        return [status || 'no status', ''];
+      }
+
+      function yn(value) {
+        if (value === true) return 'yes';
+        if (value === false) return 'no';
+        return null;
+      }
+
+      function keep(rows) {
+        return rows.filter(
+          (row) => row && row.value !== null && row.value !== undefined && row.value !== '',
+        );
+      }
+
+      function mapPage(page, discovery) {
+        if (!page) return null;
+        const headings = page.headings || {};
+        const h1 = Array.isArray(headings.h1) ? headings.h1.filter(Boolean).join('; ') : '';
+        const signals = page.contentSignals || {};
+        const images = page.images || {};
+        const dates = page.dates || {};
+        const author = page.author || {};
+        const risk = page.jsRenderingRisk || {};
+        return keep([
+          { label: 'Final URL', value: page.url },
+          { label: 'Status', value: page.statusCode },
+          { label: 'Bytes', value: page.byteLength != null ? formatNum(page.byteLength) : null },
+          { label: 'Page type', value: discovery.pageKind },
+          { label: 'Site type', value: discovery.siteType },
+          { label: 'Title', value: page.title },
+          { label: 'Meta description', value: page.metaDescription },
+          { label: 'H1', value: h1 || (headings.h1ElementCount ? 'element with no text' : null) },
+          { label: 'Canonical', value: page.canonicalUrl },
+          { label: 'Robots', value: page.effectiveRobotsDirective || page.robotsDirective },
+          { label: 'Language', value: page.lang },
+          { label: 'Viewport', value: yn(page.viewport) },
+          { label: 'Words', value: page.wordCount != null ? formatNum(page.wordCount) : null },
+          {
+            label: 'H2 / H3',
+            value:
+              headings.h2Count != null
+                ? `${formatNum(headings.h2Count)} / ${formatNum(headings.h3Count)}`
+                : null,
+          },
+          {
+            label: 'Paragraphs, lists, tables',
+            value:
+              signals.paragraphs != null
+                ? `${formatNum(signals.paragraphs)}, ${formatNum(signals.lists)}, ${formatNum(signals.tables)}`
+                : null,
+          },
+          {
+            label: 'Images missing alt',
+            value:
+              images.total != null
+                ? `${formatNum(images.missingAlt)} of ${formatNum(images.total)}`
+                : null,
+          },
+          {
+            label: 'Dates',
+            value:
+              dates.published || dates.modified
+                ? [dates.published, dates.modified].filter(Boolean).join(', ')
+                : 'absent',
+          },
+          {
+            label: 'Author',
+            value: author.hasAuthor
+              ? (author.names || []).join(', ') || 'present'
+              : author.hasAuthor === false
+                ? 'absent'
+                : null,
+          },
+          {
+            label: 'Rendering',
+            value: risk.isLikelyCsr
+              ? risk.reason || 'The HTML looks client-rendered.'
+              : risk.isLikelyCsr === false
+                ? 'The main content is in the HTML.'
+                : null,
+          },
+        ]);
+      }
+
+      function headerState(on) {
+        return on ? 'present' : 'absent';
+      }
+
+      function mapHeaders(headers) {
+        if (!headers) return null;
+        const row = (name, on) => ({
+          name,
+          state: headerState(on),
+          effect: headerState(on),
+          tone: '',
+        });
+        const valueRow = (name, value) => ({
+          name,
+          state: value || 'absent',
+          effect: value ? 'present' : 'absent',
+          tone: '',
+        });
+
+        return [
+          row('HSTS', headers.hsts),
+          row('CSP', headers.csp),
+          row('X-Frame-Options', headers.x_frame),
+          row('X-Content-Type-Options', headers.x_content_type),
+          row('Referrer-Policy', headers.referrer_policy),
+          valueRow('X-Robots-Tag', headers.x_robots_tag),
+          valueRow('Permissions-Policy', headers.permissions_policy),
+          valueRow('Cross-Origin-Opener-Policy', headers.cross_origin_opener_policy),
+          valueRow('Cross-Origin-Embedder-Policy', headers.cross_origin_embedder_policy),
+          valueRow('Cross-Origin-Resource-Policy', headers.cross_origin_resource_policy),
+        ];
+      }
+
+      function overallPair(scores) {
+        return { value: scores.overall, label: scores.label };
+      }
+
+      function headlineFor(report) {
+        const pair = overallPair(report.scores);
+        if (report.command === 'seo-check') return { ...pair, caption: 'SEO score' };
+        if (report.command === 'geo-check') return { ...pair, caption: 'GEO score' };
+        return { ...pair, caption: 'Overall readiness' };
+      }
+
+      function kindOrOverall(report, kind) {
+        if (report.command === `${kind}-check`) return overallPair(report.scores);
+        const row = report.kindScores?.[kind];
+        if (!row) return null;
+        return { value: row.value, label: row.label };
+      }
+
+      function fromCli(report) {
+        const discovery = report.discovery || {};
+        const page = discovery.auditedPage || null;
+        const headline = headlineFor(report);
+        const seo = kindOrOverall(report, 'seo');
+        const geo = kindOrOverall(report, 'geo');
+        const llms = discovery.llmsTxt || {};
+        const sitemap = discovery.sitemap || null;
+        const redirects = discovery.redirects || null;
+        const profile = report.googleProfile
+          ? keep([
+              { label: 'Domain', value: report.googleProfile.domain },
+              { label: 'Apex', value: report.googleProfile.apex },
+              { label: 'Subdomain', value: yn(report.googleProfile.isSubdomain) },
+              {
+                label: 'Profile URL',
+                value: report.googleProfile.profileUrl,
+                href: safeHref(report.googleProfile.profileUrl),
+              },
+            ])
+          : null;
+
+        return {
+          example: false,
+          command: report.command,
+          url: report.url || discovery.auditedUrl || '',
+          fetchedAt: report.fetchedAt || '',
+          headline,
+          seo,
+          geo,
+          confidence: report.scores.confidence || '',
+          evidenceQuality: report.scores.evidence_quality || '',
+          // True only when field data reached the score. The key alone does not prove it.
+          cruxAvailable: cruxHasFieldData(discovery.crux),
+          cruxNote: cruxNoteOf(discovery.crux, report.cruxApiKeyAvailable === true),
+          context: keep([
+            { label: 'Command', value: report.command },
+            { label: 'Pages in discovery', value: discovery.pagesSampled },
+            { label: 'Evidence', value: 'SearchUnit CLI' },
+            { label: 'Search Console', value: 'not in this JSON' },
+          ]),
+          breakdown: (report.scores.breakdown || []).map((row) => ({
+            name: row.display_name || row.component,
+            score: row.score,
+            weight: row.weight,
+            evidence: row.evidence_type,
+          })),
+          blockers: report.blockers || [],
+          wrong: null,
+          improve: null,
+          priority: null,
+          findings: report.findings || [],
+          actions: null,
+          sample: null,
+          sampleSentence: '',
+          page: page ? mapPage(page, discovery) : null,
+          sitemap: sitemap
+            ? keep([
+                {
+                  label: 'Status',
+                  value: sitemap.fetchStatus || (sitemap.present ? 'present' : 'absent'),
+                },
+                {
+                  label: 'URLs',
+                  value: sitemap.url_count != null ? formatNum(sitemap.url_count) : null,
+                },
+                { label: 'Audited URL listed', value: yn(sitemap.audited_url_listed) },
+                { label: 'Lastmod', value: sitemap.audited_url_lastmod },
+              ])
+            : null,
+          llms: discovery.llms_txt_status
+            ? keep([
+                { label: 'Status', value: discovery.llms_txt_status },
+                { label: 'URL', value: llms.url },
+                { label: 'Title', value: yn(llms.has_title) },
+                {
+                  label: 'Links',
+                  value: llms.link_count != null ? formatNum(llms.link_count) : null,
+                },
+                { label: 'Links to this page', value: yn(llms.linksToAuditedUrl) },
+              ])
+            : null,
+          llmsDetail: discovery.llmsTxt
+            ? { issues: llms.issues || [], links: llms.links || [] }
+            : null,
+          sitemapUrls: sitemap ? sitemap.urls || [] : null,
+          lighthouse: report.lighthouse || null,
+          render: discovery.renderedPage || null,
+          httpsReadiness: discovery.httpsReadiness || null,
+          structuredData: page
+            ? { ...(page.structuredData || {}), markup: page.markupFormats || null }
+            : null,
+          citability: page ? page.citability || null : null,
+          outline: page && page.headings ? page.headings.outline || [] : null,
+          images: page ? page.images || null : null,
+          pageLinks: page
+            ? { internal: page.internalLinks || [], outbound: page.outboundLinks || [] }
+            : null,
+          linkStatus:
+            discovery.linkStatus && discovery.linkStatus.status === 'completed'
+              ? discovery.linkStatus
+              : null,
+          redirects: redirects
+            ? keep([
+                {
+                  label: 'Hops',
+                  value: redirects.chain_length != null ? formatNum(redirects.chain_length) : null,
+                },
+                { label: 'HTTP to HTTPS', value: yn(redirects.http_to_https) },
+                { label: 'www normalized', value: yn(redirects.www_normalized) },
+                { label: 'Chain', value: (redirects.redirect_chain || []).join(', ') },
+              ])
+            : null,
+          crux: mapCrux(
+            discovery.crux,
+            report.cruxApiKeyAvailable,
+            cruxNoteOf(discovery.crux, report.cruxApiKeyAvailable === true),
+          ),
+          crawlers: (discovery.crawlerAccess?.crawlers || []).map((entry) => ({
+            bot: entry.bot,
+            status: entry.status,
+            role: catalogRole(entry.bot, report.findings),
+          })),
+          headers: mapHeaders(discovery.securityHeaders),
+          profile,
+          gsc: 'This JSON has no Search Console data. The audit continues without that source.',
+          limits: null,
+          multimodal: '',
+          measurement: null,
+          reputation: null,
+          validation: null,
+        };
+      }
+
+      const CWV_KEYS = [
+        'largest_contentful_paint',
+        'interaction_to_next_paint',
+        'cumulative_layout_shift',
+      ];
+
+      function hasCoreVitals(record) {
+        if (!record || !record.metrics) return false;
+        return CWV_KEYS.some((key) => {
+          const rating = record.metrics[key] && record.metrics[key].rating;
+          return Boolean(rating) && rating !== 'unknown';
+        });
+      }
+
+      /** True only when CrUX field Core Web Vitals reached the technical score. */
+      function cruxHasFieldData(crux) {
+        return (crux && crux.results ? crux.results : []).some(
+          (r) => hasCoreVitals(r.url_data) || hasCoreVitals(r.origin_data),
+        );
+      }
+
+      /** Says why CrUX is in or out of the score, from `discovery.crux` and the key state. */
+      function cruxNoteOf(crux, keyAvailable) {
+        if (cruxHasFieldData(crux)) return 'Field Core Web Vitals are in the technical score.';
+        if (keyAvailable === false) {
+          return 'No CrUX key. Set CRUX_API_KEY to add field Core Web Vitals to the technical score.';
+        }
+        if (!crux) return 'No CrUX block in this JSON. The technical score omits Core Web Vitals.';
+        if (crux.status === 'skipped') {
+          return keyAvailable
+            ? 'CrUX reads public URLs only, so this loopback run skipped it. The technical score omits Core Web Vitals.'
+            : 'CrUX was skipped. The technical score omits Core Web Vitals.';
+        }
+        const failed =
+          (crux.errors || []).length > 0 || (crux.results || []).some((r) => r.status === 'error');
+        if (failed) {
+          return 'The CrUX request failed. The technical score omits Core Web Vitals.';
+        }
+        return 'CrUX has no field data for this URL or origin. The technical score omits Core Web Vitals.';
+      }
+
+      function mapCrux(crux, keyAvailable, note) {
+        if (!crux && keyAvailable == null) return null;
+        const rows = [
+          { label: 'Status', value: crux ? crux.status || 'no status' : 'no CrUX block' },
+          { label: 'Technical score', value: note },
+        ];
+        const first = crux ? (crux.results || [])[0] : null;
+        if (!first) return keep(rows);
+        rows.push({ label: 'URL', value: first.url });
+        rows.push({ label: 'Result', value: first.status });
+        if (first.url_data && first.url_data.cwv_pass != null) {
+          rows.push({
+            label: 'Core Web Vitals on the URL',
+            value: first.url_data.cwv_pass ? 'pass' : 'fail',
+          });
+        }
+        return keep(rows);
+      }
+
+      function applyProse(base, prose) {
+        if (!prose || typeof prose !== 'object' || Array.isArray(prose)) return base;
+        for (const [key, value] of Object.entries(prose)) {
+          if (value === undefined || value === null) continue;
+          base[key] = value;
+        }
+        base.example = false;
+        return base;
+      }
+
+      function normalize(input) {
+        if (!input || typeof input !== 'object' || Array.isArray(input)) throw new Error('shape');
+        if (input.kind === 'searchunit-audit-fill' && input.cli) {
+          return applyProse(fromCli(input.cli), input.prose);
+        }
+        if (input.kind === 'searchunit-presentation' && input.headline && input.url) return input;
+        if (
+          (input.command === 'audit' ||
+            input.command === 'seo-check' ||
+            input.command === 'geo-check') &&
+          input.scores
+        ) {
+          return fromCli(input);
+        }
+        throw new Error('shape');
+      }
+
+      function bandOf(value) {
+        const n = Number(value);
+        if (Number.isNaN(n)) return 'This reading has no overall score.';
+        if (n >= 80) return 'Most of what this reading measures is in place.';
+        if (n >= 60) return 'Fixes remain that move the score.';
+        if (n >= 40) return 'Several parts of the score are low.';
+        return 'The score needs a fix before you go on.';
+      }
+
+      function isBlank(value) {
+        if (value == null || value === '') return true;
+        if (Array.isArray(value) && value.length === 0) return true;
+        return false;
+      }
+
+      const TONE_ICON = { fail: '×', warn: '!', ok: '✓', info: 'i' };
+
+      function markHtml(tone, word) {
+        const cls = tone || '';
+        const icon = TONE_ICON[cls] || '–';
+        return `<span class="mark ${esc(cls)}"><span class="glyph ${esc(cls)}" aria-hidden="true">${icon}</span>${esc(word)}</span>`;
+      }
+
+      function sevChip(severity) {
+        const [word, cls, icon] = SEV[severity] || ['Note', 'info', 'i'];
+        return { word, cls, icon };
+      }
+
+      const PRIORITY = {
+        critical: ['Critical', 'fail', '×'],
+        crítica: ['Critical', 'fail', '×'],
+        critica: ['Critical', 'fail', '×'],
+        high: ['High', 'warn', '!'],
+        alta: ['High', 'warn', '!'],
+        medium: ['Medium', 'info', 'i'],
+        média: ['Medium', 'info', 'i'],
+        media: ['Medium', 'info', 'i'],
+        low: ['Low', '', '·'],
+        baixa: ['Low', '', '·'],
+      };
+
+      function priorityMark(priority) {
+        const value = String(priority || '').toLowerCase();
+        return PRIORITY[value] || [priority || 'No priority', '', '·'];
+      }
+
+      function factsHtml(rows) {
+        return `<dl class="facts">${rows
+          .map((row) => {
+            const href = row.href ? safeHref(row.href) : '';
+            const value = href ? `<a href="${esc(href)}">${esc(row.value)}</a>` : esc(row.value);
+            return `<div><dt>${esc(row.label)}</dt><dd>${value}</dd></div>`;
+          })
+          .join('')}</dl>`;
+      }
+
+      function rowsOrNote(rows, missing, empty) {
+        if (rows == null) return `<p class="empty">${esc(missing)}</p>`;
+        if (!rows.length) return `<p class="empty">${esc(empty)}</p>`;
+        return factsHtml(rows);
+      }
+
+      function tableHtml(caption, headers, rows) {
+        const head = headers.map((name) => `<th scope="col">${esc(name)}</th>`).join('');
+        const body = rows
+          .map(
+            (cells) =>
+              `<tr>${cells.map((cell, index) => `<td data-label="${esc(headers[index])}">${cell}</td>`).join('')}</tr>`,
+          )
+          .join('');
+        const title = caption ? `<caption>${esc(caption)}</caption>` : '';
+        return `<div class="scroller"><table class="stack">${title}<thead><tr>${head}</tr></thead><tbody>${body}</tbody></table></div>`;
+      }
+
+      function subscoreHtml(name, score, note) {
+        const n = score ? Number(score.value) : Number.NaN;
+        const has = !Number.isNaN(n);
+        const text = has ? scoreText(n) : 'no score';
+        return `<li class="subscore">
+            <div class="subscore-head"><span class="subscore-name">${esc(name)}</span><span class="subscore-value">${esc(text)}${has ? ' <small>of 100</small>' : ''}</span></div>
+            <div class="bar" role="img" aria-label="${esc(name)} ${esc(text)}${has ? ' of 100' : ''}"><span style="width: ${clampPct(n)}%"></span></div>
+            <p class="subscore-note">${esc(note)}</p>
+          </li>`;
+      }
+
+      function cruxHtml(doc) {
+        const inScore = doc.cruxAvailable === true;
+        const note =
+          doc.cruxNote ||
+          (inScore
+            ? 'Field Core Web Vitals are in the technical score.'
+            : 'The technical score does not include Core Web Vitals.');
+        return `<li class="subscore">
+            <div class="subscore-head"><span class="subscore-name">CrUX</span><span class="subscore-value is-text">${inScore ? 'In the score' : 'Out of the score'}</span></div>
+            <p class="subscore-note">${esc(note)}</p>
+          </li>`;
+      }
+
+      function heroHtml(doc, counts) {
+        const value = doc.headline?.value;
+        const has = !(value == null || value === '') && !Number.isNaN(Number(value));
+        const n = has ? Number(value) : Number.NaN;
+        const text = has ? scoreText(n) : 'no score';
+        const label = labelOf(doc.headline?.label) || 'No label';
+        const conf = CONF[doc.confidence] || doc.confidence || 'no value';
+        const ev = evidenceOf(doc.evidenceQuality) || 'no value';
+        const sentence = has
+          ? `Score ${text} of 100, ${label.toLowerCase()}. ${bandOf(value)}`
+          : bandOf(value);
+        const firstStep = doc.priority?.[0]?.title ? ` First step: ${doc.priority[0].title}.` : '';
+        const mark = has ? `<span class="scale-mark" style="left: ${clampPct(n)}%"></span>` : '';
+        const scaleLabel = has
+          ? `Score ${text} on a 0 to 100 scale`
+          : 'No score on a 0 to 100 scale';
+        return `<section class="hero" id="readiness" aria-labelledby="readiness-title">
+            <h2 class="hero-title" id="readiness-title" tabindex="-1">Result</h2>
+            <div class="hero-grid">
+              <div>
+                <p class="hero-num${has ? '' : ' is-empty'}">${esc(text)}${has ? '<small>of 100</small>' : ''}</p>
+                <p class="hero-label">${esc(label)}</p>
+                <p class="hero-caption">${esc(doc.headline?.caption || 'Readiness')}</p>
+                <p class="hero-sentence">${esc(sentence)}${esc(firstStep)}</p>
+              </div>
+              <ul class="subscores">
+                ${subscoreHtml('SEO', doc.seo, 'Google search and the like.')}
+                ${subscoreHtml('GEO', doc.geo, 'AI answers that cite the page.')}
+                ${cruxHtml(doc)}
+              </ul>
+            </div>
+            <div class="scale">
+              <div class="scale-track" role="img" aria-label="${esc(scaleLabel)}"><span></span><span></span><span></span><span></span>${mark}</div>
+              <ul class="scale-labels">
+                <li>0 to 39: needs a fix</li>
+                <li>40 to 59: needs attention</li>
+                <li>60 to 79: still moves with a fix</li>
+                <li>80 to 100: high in this reading</li>
+              </ul>
+            </div>
+            <dl class="tally">
+              <div><dt>Fails</dt><dd>${counts.fails}</dd></div>
+              <div><dt>Warnings</dt><dd>${counts.warns}</dd></div>
+              <div><dt>Ok</dt><dd>${counts.oks}</dd></div>
+              <div><dt>Blockers</dt><dd>${counts.blockers}</dd></div>
+            </dl>
+            <p class="hero-foot">The score comes from the HTML the server returned. Visits, rank, and AI citation stay out of that number. Confidence ${esc(conf)}. Evidence ${esc(ev)}.</p>
+          </section>`;
+      }
+
+      function breakdownHtml(rows) {
+        if (!rows?.length) return `<p class="empty">This file has no component table.</p>`;
+        const items = rows
+          .map(
+            (row) => `<li class="part">
+              <div class="part-head"><span>${esc(row.name)}</span><span class="part-val">${row.score === null ? 'N/A' : esc(formatNum(row.score))}</span></div>
+              <div class="bar" aria-hidden="true"><span style="width: ${row.score === null ? 0 : clampPct(row.score)}%"></span></div>
+              <p class="part-meta">Weight ${esc(formatNum(row.weight))}, evidence ${esc(evidenceOf(row.evidence))}.</p>
+            </li>`,
+          )
+          .join('');
+        return `<p class="muted prose">Each bar is one part of the score. The weight says how much it counts in the total. Lab, on this bar, is what the static HTML shows. CrUX is the field metric.</p>
+          <ul class="parts">${items}</ul>`;
+      }
+
+      function blockersHtml(rows) {
+        if (!rows?.length) return '';
+        const items = rows
+          .map(
+            (row) =>
+              `<li class="callout"><span class="glyph fail" aria-hidden="true">×</span><p><strong>Blocker</strong> <code>${esc(row.id)}</code> caps ${esc(row.component)} at ${esc(formatNum(row.cap))}.</p></li>`,
+          )
+          .join('');
+        return `<ul class="callouts">${items}</ul>`;
+      }
+
+      function readingHtml(doc) {
+        const blockers = blockersHtml(doc.blockers);
+        return `<div class="reading">
+            <div class="context">${rowsOrNote(doc.context, 'No reading context.', 'No reading context.')}</div>
+            <div>
+              <h3>Where the score comes from</h3>
+              ${breakdownHtml(doc.breakdown)}
+            </div>
+            ${blockers ? `<div><h3>What caps the score</h3>${blockers}</div>` : ''}
+          </div>`;
+      }
+
+      function severityChip(severity) {
+        if (!severity) return '';
+        const [word, cls] = priorityMark(severity);
+        return `<span class="mark ${esc(cls)}">${esc(word)}</span>`;
+      }
+
+      function idsHtml(ids) {
+        if (!ids?.length) return '';
+        return `<p class="ids">${ids.map((id) => `<code>${esc(id)}</code>`).join('')}</p>`;
+      }
+
+      /* Plan link: the id matches the Plan entry's <details id>, the same anchor the priority list uses. */
+      function planHtml(plan) {
+        if (!plan) return '';
+        const href = `#${encodeURIComponent(String(plan))}`;
+        return `<p class="evidence">Plan: <a href="${esc(href)}">${esc(plan)}</a>.</p>`;
+      }
+
+      function issueList(items, cls, icon, empty) {
+        if (items == null) return '';
+        if (!items.length) return `<p class="empty">${esc(empty)}</p>`;
+        return `<ul class="items">${items
+          .map((item) => {
+            const quote = item.quote ? `<blockquote><p>"${esc(item.quote)}"</p></blockquote>` : '';
+            const affected = item.affected
+              ? `<p class="evidence">Affects: ${esc(item.affected)}.</p>`
+              : '';
+            return `<li class="item ${cls}">
+              <div class="item-head"><span class="glyph ${cls}" aria-hidden="true">${icon}</span><h4>${esc(item.title)}</h4>${severityChip(item.severity)}</div>
+              <p>${esc(item.text)}</p>
+              ${idsHtml(item.ids)}
+              <p class="evidence">Evidence: ${esc(item.evidence || 'no label')}.</p>
+              ${affected}
+              ${planHtml(item.plan)}
+              ${quote}
+            </li>`;
+          })
+          .join('')}</ul>`;
+      }
+
+      function diagnosisHtml(doc) {
+        if (doc.wrong == null && doc.improve == null) {
+          return `<p class="empty">The prose diagnosis is not in this file.</p>`;
+        }
+        return `<div class="split">
+            <div><h3>What is wrong</h3>${issueList(doc.wrong, 'fail', '×', 'No confirmed issues found. Evidence limitation: the list was empty.')}</div>
+            <div><h3>What to improve</h3>${issueList(doc.improve, 'warn', '!', 'No confirmed issues found. Evidence limitation: the list was empty.')}</div>
+          </div>`;
+      }
+
+      function priorityHtml(items) {
+        if (items == null) return `<p class="empty">The priority order is not in this file.</p>`;
+        if (!items.length) return `<p class="empty">No priority item in this file.</p>`;
+        return `<ol class="steps">${items
+          .map((item) => {
+            const href = item.action ? `#${item.action}` : '';
+            const title = href ? `<a href="${esc(href)}">${esc(item.title)}</a>` : esc(item.title);
+            const affected = item.affected
+              ? `<p class="evidence">Affects: ${esc(item.affected)}.</p>`
+              : '';
+            return `<li><p class="step-title">${title}${severityChip(item.severity)}</p><p>${esc(item.text || '')}</p>${idsHtml(item.ids)}${affected}</li>`;
+          })
+          .join('')}</ol>`;
+      }
+
+      function findingsHtml(items) {
+        if (!items?.length) return `<p class="empty">No finding in this file.</p>`;
+        const groups = [];
+        for (const finding of items) {
+          const last = groups.at(-1);
+          if (last && last.source === finding.source) last.items.push(finding);
+          else groups.push({ source: finding.source, items: [finding] });
+        }
+        const blocks = groups
+          .map((group) => {
+            const count = (severity) => group.items.filter((f) => f.severity === severity).length;
+            const fails = count('fail');
+            const warns = count('warn');
+            const oks = count('pass');
+            const parts = [];
+            if (fails) parts.push(`${fails} ${fails === 1 ? 'fail' : 'fails'}`);
+            if (warns) parts.push(`${warns} ${warns === 1 ? 'warning' : 'warnings'}`);
+            if (oks) parts.push(`${oks} ok`);
+            parts.push(`${group.items.length} ${group.items.length === 1 ? 'item' : 'items'}`);
+            const rows = group.items
+              .map((finding, index) => {
+                const { word, cls, icon } = sevChip(finding.severity);
+                const open =
+                  finding.severity === 'fail' && index === 0 && group === groups[0] ? ' open' : '';
+                return `<details class="action finding" data-finding data-severity="${esc(finding.severity || 'info')}"${open}>
+                  <summary><span class="glyph ${cls}" aria-hidden="true">${icon}</span><span class="row-main"><span class="row-title">${esc(finding.title)}</span><code class="row-id">${esc(finding.id)}</code></span><span class="mark ${cls}">${esc(word)}</span><span class="chev" aria-hidden="true"></span></summary>
+                  <div><dl class="fields"><div><dt>Source</dt><dd>${esc(finding.source || 'no source')}</dd></div><div><dt>Detail</dt><dd>${esc(finding.detail || 'no detail')}</dd></div></dl></div>
+                </details>`;
+              })
+              .join('');
+            return `<div class="group" data-group>
+                <div class="group-head"><h3>${esc(groupLabel(group.source))}</h3><p class="group-count">${esc(parts.join(', '))}</p></div>
+                <div class="rows">${rows}</div>
+              </div>`;
+          })
+          .join('');
+        return `<div class="tools">
+            <div>
+              <p class="tool-label" id="severity-label">Severity</p>
+              <div class="segmented" role="group" aria-labelledby="severity-label" id="filters">
+                <button type="button" data-sev="all" aria-pressed="true">All</button>
+                <button type="button" data-sev="fail" aria-pressed="false">Fails</button>
+                <button type="button" data-sev="warn" aria-pressed="false">Warnings</button>
+                <button type="button" data-sev="pass" aria-pressed="false">Ok</button>
+                <button type="button" data-sev="info" aria-pressed="false">Notes</button>
+              </div>
+            </div>
+            <div>
+              <label class="tool-label" for="filter-text">Filter by text</label>
+              <input id="filter-text" type="search" autocomplete="off" placeholder="Filter findings" />
+            </div>
+          </div>
+          <p id="count" class="count-line" aria-live="polite"></p>
+          <p id="filter-empty" class="empty" hidden>No finding matches that filter.</p>
+          ${blocks}`;
+      }
+
+      function actionsHtml(items) {
+        if (items == null) {
+          return `<p class="empty">The Plan is not in this file. The order stays in What to fix.</p>`;
+        }
+        if (!items.length) return `<p class="empty">No Plan entry in this file.</p>`;
+        return items
+          .map((action) => {
+            const [word, cls, icon] = priorityMark(action.severity);
+            const decision = (action.decision ?? '').trim();
+            const fields = [
+              ['Source', action.source],
+              ['Location', action.location],
+              ['Current → target', `${action.current} → ${action.target}`],
+              ['Impact', action.impact],
+              ['Owner', action.owner],
+              ['Depends on', action.dependsOn],
+              ['Decision', decision === 'none' ? '' : decision],
+              ['How to fix', action.fix],
+              ['Verify', action.verify],
+            ]
+              .filter((field) => field[1])
+              .map(([name, value]) => `<div><dt>${esc(name)}</dt><dd>${esc(value)}</dd></div>`)
+              .join('');
+            const example = action.example
+              ? `<div><p class="fields-label">Example</p><pre><code>${esc(action.example)}</code></pre></div>`
+              : '';
+            const meta = [`Phase ${action.phase}`, `effort ${action.effort}`].join(', ');
+            return `<details class="action" id="${esc(action.id || '')}"${action.open ? ' open' : ''}>
+              <summary><span class="glyph ${cls}" aria-hidden="true">${icon}</span><span class="row-main"><span class="row-title">${esc(action.title)}</span><span class="row-meta">${esc(meta)}</span></span><span class="mark ${cls}">${esc(word)}</span><span class="chev" aria-hidden="true"></span></summary>
+              <div>${action.why ? `<p class="prose">${esc(action.why)}</p>` : ''}<dl class="fields">${fields}</dl>${example}</div>
+            </details>`;
+          })
+          .join('');
+      }
+
+      function checksHtml(items) {
+        if (!items?.length) return `<p class="empty">No checks in this file.</p>`;
+        const hasNote = items.some((row) => row.note);
+        const headers = ['Check', 'Result', 'Evidence', ...(hasNote ? ['Note'] : [])];
+        const checkRow = (row) => [
+          `<code>${esc(row.slug)}</code>`,
+          esc(row.result || ''),
+          esc(row.evidence || ''),
+          ...(hasNote ? [esc(row.note || '')] : []),
+        ];
+        // Rows with `not observed` are checks that found no issue. They sit in a closed group after the rest.
+        const actionable = items.filter((row) => row.result !== 'not observed');
+        const quiet = items.filter((row) => row.result === 'not observed');
+        const actionableHtml = actionable.length
+          ? tableHtml('', headers, actionable.map(checkRow))
+          : '';
+        const quietCount = quiet.length;
+        const quietLabel = `${quietCount} ${quietCount === 1 ? 'check' : 'checks'} with no issue`;
+        const quietHtml = quiet.length
+          ? `<details class="checks-quiet"><summary>${esc(quietLabel)}</summary>${tableHtml('', headers, quiet.map(checkRow))}</details>`
+          : '';
+        return `${actionableHtml}${quietHtml}`;
+      }
+
+      // Recurrence states use the same tones as findings: worse is fail, better is ok.
+      const RECURRENCE_TONE = {
+        new: 'warn',
+        recurring: 'info',
+        worsened: 'fail',
+        improved: 'ok',
+        resolved: 'ok',
+      };
+
+      function recurrenceHtml(items) {
+        const list = items.map((item) => {
+          const tone = RECURRENCE_TONE[item.state] || '';
+          const plan = item.plan && item.plan !== 'none' ? planHtml(item.plan) : '';
+          return `<li class="item ${esc(tone)}">
+              <div class="item-head"><span class="glyph ${esc(tone)}" aria-hidden="true">${TONE_ICON[tone] || '·'}</span><h4><code>${esc(item.id)}</code></h4><span class="mark ${esc(tone)}">${esc(item.state)}</span></div>
+              ${plan}
+            </li>`;
+        });
+        return `<ul class="items">${list.join('')}</ul>`;
+      }
+
+      function sampleHtml(doc) {
+        if (doc.sample == null)
+          return `<p class="empty">The sample coverage is not in this file.</p>`;
+        if (!doc.sample.length) return `<p class="empty">No sample URL in this file.</p>`;
+        const rows = doc.sample.map((row) => [
+          `<span class="break">${esc(row.url)}</span>`,
+          esc(row.role || ''),
+          esc(row.template || 'unnamed'),
+          esc(row.status || 'no status'),
+          esc(row.seo || 'no score'),
+        ]);
+        const sentence = doc.sampleSentence
+          ? `<p class="muted prose">${esc(doc.sampleSentence)}</p>`
+          : '';
+        return `${tableHtml('', ['URL', 'Role', 'Template', 'Status', 'SEO'], rows)}${sentence}`;
+      }
+
+      function crawlersHtml(rows) {
+        if (rows == null) return `<p class="empty">The crawlers are not in this file.</p>`;
+        if (!rows.length) return `<p class="empty">No crawler in this file.</p>`;
+        const allowed = rows.filter((r) => r.status === 'allowed').length;
+        const body = rows.map((row) => {
+          const [word, cls] = crawlerState(row.status);
+          return [`<strong>${esc(row.bot)}</strong>`, markHtml(cls, word), esc(row.role)];
+        });
+        return `<p>${allowed} of ${rows.length} agents allowed by robots.txt.</p>
+          ${tableHtml('Agent, robots.txt status, and catalog role', ['Agent', 'Status', 'Role'], body)}`;
+      }
+
+      function headersHtml(rows) {
+        if (rows == null) return `<p class="empty">The headers are not in this file.</p>`;
+        const body = rows.map((row) => [
+          `<strong>${esc(row.name)}</strong>`,
+          markHtml(row.tone || '', row.state),
+          esc(row.effect),
+        ]);
+        return tableHtml('Present or absent on the response', ['Header', 'Status', 'Effect'], body);
+      }
+
+      function examplesHtml(items) {
+        if (!items?.length) return '';
+        return items
+          .map(
+            (item) =>
+              `<div class="example"><h3>${esc(item.title || '')}</h3><p class="muted">${esc(item.templates || '')}</p><pre><code>${esc(item.text || '')}</code></pre></div>`,
+          )
+          .join('');
+      }
+
+      function gscHtml(value) {
+        if (value == null || value === '')
+          return `<p class="empty">Search Console is not in this file.</p>`;
+        if (typeof value === 'string')
+          return textBlock(value, 'Search Console is not in this file.');
+        const summary = value.summary ? `<p class="prose">${esc(value.summary)}</p>` : '';
+        const groups = [
+          {
+            caption: 'Query and page',
+            headers: ['Query', 'Page', 'Clicks', 'Impressions', 'Position'],
+            rows: (value.queryPages || []).map((row) => [
+              row.query,
+              row.page,
+              row.clicks,
+              row.impressions,
+              row.position,
+            ]),
+          },
+          {
+            caption: 'Striking distance',
+            headers: ['Query', 'Page', 'Position'],
+            rows: (value.strikingDistance || []).map((row) => [row.query, row.page, row.position]),
+          },
+          {
+            caption: 'Inspection',
+            headers: ['URL', 'Verdict'],
+            rows: (value.inspections || []).map((row) => [row.url, row.verdict]),
+          },
+          {
+            caption: 'Slice errors',
+            headers: ['Slice', 'Reason'],
+            rows: (value.errors || []).map((row) => [row.slice, row.reason]),
+          },
+        ];
+        if (!groups.some((group) => group.rows.length)) return summary;
+        const tables = groups
+          .map((group) =>
+            group.rows.length
+              ? tableHtml(
+                  group.caption,
+                  group.headers,
+                  group.rows.map((cells) =>
+                    cells.map((cell) => esc(cell == null ? '' : String(cell))),
+                  ),
+                )
+              : `<p class="muted">${esc(group.caption)}: None.</p>`,
+          )
+          .join('');
+        return summary + tables;
+      }
+
+      function textBlock(value, missing) {
+        if (value == null || value === '') return `<p class="empty">${esc(missing)}</p>`;
+        if (Array.isArray(value)) {
+          if (!value.length) return `<p class="empty">No line in this file.</p>`;
+          return `<ul class="lines">${value.map((line) => `<li>${esc(line)}</li>`).join('')}</ul>`;
+        }
+        return `<p class="prose">${esc(value)}</p>`;
+      }
+
+      function validationHtml(items) {
+        if (items == null) return `<p class="empty">The recheck list is not in this file.</p>`;
+        if (!items.length) return `<p class="empty">No recheck in this file.</p>`;
+        return `<ol class="steps">${items
+          .map(
+            (item) => `<li><p><code>${esc(item.command)}</code></p><p>${esc(item.check)}</p></li>`,
+          )
+          .join('')}</ol>`;
+      }
+
+      // Fixed Limits sentences, from user-report.md. The method sentence is copied verbatim.
+      const LIMITS_NO_RANKING =
+        'This report states no ranking, traffic, revenue, or citation outcome.';
+      const LIMITS_METHOD =
+        'The sample judgment reads static HTML. When the HTML is a shell and discovery.renderedPage.mainText is set with status ok, that text is rendered evidence from the CLI. The internal link list is cut at 50. Outbound links are cut at 40. The audit probed the status of up to 25 same-site links. Outbound links are counted, never requested. Citability keeps the 12 highest scores and the 12 lowest scores outside that list. Besides the sample GET, the audit fetches robots.txt, llms.txt, up to 25 sitemap files, and a mobile snapshot of the page. The Chrome render and the Lighthouse lab load the page again when they run. With a CrUX key and a public URL, the CLI also queries the CrUX API. Lighthouse, when status is ok, is lab evidence from Chrome. Lighthouse failed audits do not change the readiness score.';
+
+      // The Cuts line keeps its label. A value that already starts with "Cuts:" is not doubled.
+      function cutsLine(value) {
+        if (isBlank(value)) return '';
+        const text = String(value).replace(/^\s*Cuts:\s*/i, '');
+        return `<p class="prose">Cuts: ${esc(text)}</p>`;
+      }
+
+      function measureGroup(doc) {
+        if (isBlank(doc.multimodal) && isBlank(doc.measurement)) return '';
+        const multi = isBlank(doc.multimodal) ? '' : textBlock(doc.multimodal, '');
+        const measured = isBlank(doc.measurement) ? '' : textBlock(doc.measurement, '');
+        return `<h3 class="sub-title">Measurement</h3>${multi}${measured}`;
+      }
+
+      function reputationGroup(doc) {
+        if (doc.reputation == null) return '';
+        return `<h3 class="sub-title">Site reputation</h3>${textBlock(doc.reputation, 'The reputation check is not in this file.')}`;
+      }
+
+      // Order follows user-report.md: six lines, multimodal note, method sentence, Cuts line.
+      function limitsBody(doc) {
+        return `<p class="prose">${esc(LIMITS_NO_RANKING)}</p>
+               ${textBlock(doc.limits, 'The six limit lines are not in this file.')}
+               ${measureGroup(doc)}
+               <p class="prose">${esc(LIMITS_METHOD)}</p>
+               ${cutsLine(doc.cuts)}
+               ${reputationGroup(doc)}`;
+      }
+
+      function sectionCard(id, title, sub, body) {
+        return `<section class="block" id="${id}" aria-labelledby="${id}-title">
+          <header class="block-head">
+            <h2 id="${id}-title" tabindex="-1">${esc(title)}</h2>
+            ${sub ? `<p class="block-sub">${esc(sub)}</p>` : ''}
+          </header>
+          <div class="block-body">${body}</div>
+        </section>`;
+      }
+
+      const SITEMAP_SHOWN = 20;
+      const IMAGES_SHOWN = 20;
+      const LINKS_SHOWN = 30;
+      const LLMS_SHOWN = 30;
+      const LH_METRICS = [
+        ['lcpMs', 'Largest Contentful Paint', ' ms'],
+        ['fcpMs', 'First Contentful Paint', ' ms'],
+        ['inpMs', 'Interaction to Next Paint', ' ms'],
+        ['tbtMs', 'Total Blocking Time', ' ms'],
+        ['cls', 'Cumulative Layout Shift', ''],
+      ];
+      /* Link state by rank: broken first, then redirected, then ok. */
+      const LINK_STATE = [
+        ['Broken', 'fail'],
+        ['Redirect', 'warn'],
+        ['Ok', 'ok'],
+      ];
+
+      function auditItemsHtml(items) {
+        const list = (items || [])
+          .map((item) => item.url || (item.node && item.node.selector) || '')
+          .filter(Boolean);
+        if (!list.length) return '<span class="muted">none listed</span>';
+        const shown = list
+          .slice(0, 5)
+          .map((text) => `<code>${esc(text)}</code>`)
+          .join('<br>');
+        return list.length > 5
+          ? `${shown}<br><span class="muted">${list.length - 5} more</span>`
+          : shown;
+      }
+
+      function lighthouseHtml(lh) {
+        if (!lh || lh.reason === 'not-requested') return '';
+        if (lh.status !== 'ok') {
+          const hint = lh.install
+            ? `<p class="prose">${esc(`${lh.install}, then re-run with -o file.json.`)}</p>`
+            : '';
+          const state =
+            lh.status === 'skipped' ? 'The lab was skipped' : 'The lab run did not finish';
+          return `<p class="prose">${state}. Reason: <code>${esc(lh.reason || 'no reason')}</code>. The audit score does not change.</p>${hint}`;
+        }
+        const metrics = LH_METRICS.filter(([key]) => lh.metrics && lh.metrics[key] != null).map(
+          ([key, label, unit]) => ({ label, value: `${formatNum(lh.metrics[key])}${unit}` }),
+        );
+        const rows = keep([
+          {
+            label: 'Final URL',
+            value: lh.finalUrl,
+            href: lh.finalUrl ? safeHref(lh.finalUrl) : '',
+          },
+          ...metrics,
+        ]);
+        const failed = lh.failedAudits || [];
+        const table = failed.length
+          ? tableHtml(
+              'Lab audits under a full score, in Lighthouse order',
+              ['Audit', 'Category', 'Score', 'Value', 'Items'],
+              failed.map((audit) => [
+                `<strong>${esc(audit.title)}</strong><br><code>${esc(audit.id)}</code>`,
+                esc(audit.category),
+                esc(audit.score == null ? 'no score' : scoreText(audit.score * 100)),
+                esc(audit.displayValue || ''),
+                auditItemsHtml(audit.items),
+              ]),
+            )
+          : '<p class="empty">No lab audit under a full score.</p>';
+        return `<div class="sub">
+            <h3 class="sub-title">Metrics</h3>
+            ${rows.length ? factsHtml(rows) : '<p class="empty">No metric in the lab run.</p>'}
+          </div>
+          <div class="sub">
+            <h3 class="sub-title">Failed audits</h3>
+            ${table}
+          </div>`;
+      }
+
+      function renderHtml(render) {
+        if (!render || render.reason === 'not-requested') return '';
+        if (render.status !== 'ok') {
+          const hint = render.install
+            ? `<p class="prose">${esc(`${render.install}, then re-run with -o file.json.`)}</p>`
+            : '';
+          return `<p class="prose">The Chrome render did not finish. Reason: <code>${esc(render.reason || 'no reason')}</code>. Rendered-only checks are insufficient.</p>${hint}`;
+        }
+        const onlyAfter = render.linksOnlyAfterRender || [];
+        return factsHtml(
+          keep([
+            { label: 'Title', value: render.title },
+            { label: 'H1', value: Array.isArray(render.h1) ? render.h1.join('; ') : render.h1 },
+            {
+              label: 'Words',
+              value: render.wordCount != null ? formatNum(render.wordCount) : null,
+            },
+            { label: 'Canonical', value: render.canonicalUrl, href: render.canonicalUrl },
+            { label: 'Robots', value: render.effectiveRobotsDirective },
+            {
+              label: 'Internal links',
+              value: render.internalLinkCount != null ? formatNum(render.internalLinkCount) : null,
+            },
+            {
+              label: 'Links only after render',
+              value: onlyAfter.length
+                ? `${formatNum(render.linksOnlyAfterRenderCount ?? onlyAfter.length)}: ${onlyAfter.slice(0, 5).join(', ')}`
+                : 'none',
+            },
+          ]),
+        );
+      }
+
+      function httpsReadinessHtml(readiness) {
+        if (!readiness) return '';
+        const rows = [
+          ...(readiness.insecureSubresources || []).map((url) => ['Insecure subresource', url]),
+          ...(readiness.insecureUrls || []).map((item) => [
+            `Insecure URL (${item.field})`,
+            item.url,
+          ]),
+          ...(readiness.devHostUrls || []).map((item) => [
+            `Dev host URL (${item.field})`,
+            item.url,
+          ]),
+        ];
+        if (!rows.length) {
+          return '<p class="empty">Nothing on this page breaks when it is served over HTTPS.</p>';
+        }
+        return tableHtml(
+          'What breaks on the HTTPS production URL',
+          ['Kind', 'URL'],
+          rows.map(([kind, url]) => [esc(kind), `<span class="break">${esc(url)}</span>`]),
+        );
+      }
+
+      function structuredHtml(sd) {
+        if (!sd) return '';
+        const blocks = sd.blocks || [];
+        const markup = sd.markup || {};
+        const facts = keep([
+          {
+            label: 'JSON-LD blocks',
+            value: sd.jsonld_blocks != null ? formatNum(sd.jsonld_blocks) : null,
+          },
+          {
+            label: 'Parse errors',
+            value: sd.parse_errors != null ? formatNum(sd.parse_errors) : null,
+          },
+          {
+            label: 'Blocks without @type',
+            value: sd.missingTypeCount != null ? formatNum(sd.missingTypeCount) : null,
+          },
+          { label: '@graph', value: yn(sd.hasGraph) },
+          { label: 'Types', value: (sd.types || []).join(', ') },
+          { label: 'Microdata types', value: (markup.microdata_types || []).join(', ') },
+          { label: 'RDFa types', value: (markup.rdfa_types || []).join(', ') },
+        ]);
+        const rows = blocks.map((block) => [
+          `<strong>${esc(block.type || 'no type')}</strong>${block.name ? `<br>${esc(block.name)}` : ''}`,
+          block.hasRequiredProps ? markHtml('ok', 'Complete') : markHtml('fail', 'Missing props'),
+          esc((block.missingProps || []).join(', ') || 'none'),
+          esc((block.recommendedMissing || []).join(', ') || 'none'),
+        ]);
+        const table = rows.length
+          ? tableHtml(
+              'JSON-LD blocks',
+              ['Type', 'Required props', 'Missing required', 'Recommended missing'],
+              rows,
+            )
+          : '<p class="empty">No JSON-LD block on the page.</p>';
+        const parse =
+          sd.parse_errors > 0
+            ? `<p class="evidence">${esc(formatNum(sd.parse_errors))} JSON-LD block(s) did not parse. The audit keeps no error text for them.</p>`
+            : '';
+
+        return `${facts.length ? factsHtml(facts) : ''}${table}${parse}`;
+      }
+
+      function citabilityHtml(cit) {
+        if (!cit) return '';
+        const headers = ['Score', 'Words', 'Block', 'Dimensions'];
+        const dims = (d) =>
+          Object.entries(d || {})
+            .map(([name, value]) => `${name.replaceAll('_', ' ')} ${scoreText(value)}`)
+            .join(', ');
+        const rowsOf = (list) =>
+          list.map((block) => [
+            esc(scoreText(block.score)),
+            esc(formatNum(block.word_count)),
+            esc(block.text || block.text_preview || ''),
+            esc(dims(block.dimensions)),
+          ]);
+        const top = cit.blocks || [];
+        const weak = cit.weakBlocks || [];
+        const facts = keep([
+          { label: 'Page score', value: cit.page_score != null ? scoreText(cit.page_score) : null },
+          {
+            label: 'Citation-ready blocks',
+            value: cit.citation_ready_blocks != null ? formatNum(cit.citation_ready_blocks) : null,
+          },
+          {
+            label: 'Blocks in the ideal word range',
+            value: cit.ideal_range_blocks != null ? formatNum(cit.ideal_range_blocks) : null,
+          },
+        ]);
+        const opening = cit.opening
+          ? `<div><p class="fields-label">Opening paragraph</p><blockquote><p>${esc(cit.opening)}</p></blockquote></div>`
+          : '';
+        const topTable = top.length
+          ? tableHtml('Highest scoring blocks', headers, rowsOf(top))
+          : '<p class="empty">No answer block was scored on this page.</p>';
+        const weakTable = weak.length
+          ? tableHtml('Lowest scoring blocks outside the list above', headers, rowsOf(weak))
+          : '';
+
+        return `<div class="sub">
+            ${facts.length ? factsHtml(facts) : ''}
+            ${opening}
+            ${topTable}
+            ${weakTable}
+          </div>`;
+      }
+
+      function headingsHtml(outline) {
+        if (!outline) return '';
+        const items = outline.filter((item) => item && item.level >= 1 && item.level <= 3);
+        if (!items.length) return '<p class="empty">No H1 to H3 heading in the outline.</p>';
+        return `<ul class="lines outline">${items
+          .map((item) => {
+            const level = Number(item.level);
+            return `<li data-level="${level}"><code>H${level}</code> ${esc(item.text || '(no text)')}</li>`;
+          })
+          .join('')}</ul>`;
+      }
+
+      function imagesHtml(images) {
+        if (!images) return '';
+        const items = images.items || [];
+        const total = images.total || 0;
+        const missing = images.missingAlt || 0;
+        if (!total) return '<p class="empty">No image on the page.</p>';
+        if (!missing) return '<p class="empty">Every image on the page has an alt attribute.</p>';
+        const listed = items.filter((item) => item && item.alt == null);
+        const shown = listed.slice(0, IMAGES_SHOWN);
+        const scope =
+          items.length < total
+            ? ` The list reads the first ${formatNum(items.length)} images.`
+            : '';
+        const list = shown.length
+          ? `<ul class="lines">${shown
+              .map((item) => `<li><code>${esc(String(item.src).slice(0, 200))}</code></li>`)
+              .join('')}</ul>`
+          : '<p class="empty">None of the images read is missing an alt attribute.</p>';
+
+        return `<p class="prose">${esc(`${formatNum(missing)} of ${formatNum(total)} images have no alt attribute.${scope}`)}</p>
+          ${list}`;
+      }
+
+      function linksHtml(status, pageLinks) {
+        if (!status) return '';
+        const results = status.results || [];
+        const labels = new Map();
+        const pool = [
+          ...((pageLinks && pageLinks.internal) || []),
+          ...((pageLinks && pageLinks.outbound) || []),
+        ];
+        for (const link of pool) {
+          if (link && link.href && !labels.has(link.href)) labels.set(link.href, link.text || '');
+        }
+        const state = (row) => {
+          if (row.error || row.status == null || row.status >= 400) return 0;
+          if (row.redirects > 0) return 1;
+          return 2;
+        };
+        const table = (scope, caption) => {
+          const rows = results
+            .filter((row) => row.scope === scope)
+            .sort((a, b) => state(a) - state(b));
+          if (!rows.length) return `<p class="muted">${esc(caption)}: none probed.</p>`;
+          const shown = rows.slice(0, LINKS_SHOWN).map((row) => {
+            const [word, tone] = LINK_STATE[state(row)];
+            const label = labels.get(row.href);
+            return [
+              `<span class="break">${esc(row.href)}</span>${label ? `<br><span class="muted">${esc(label)}</span>` : ''}`,
+              markHtml(tone, word),
+              esc(row.status == null ? 'no response' : row.status),
+              esc(row.redirects || 0),
+              esc(row.error || ''),
+            ];
+          });
+          const count = `${caption}, showing ${shown.length} of ${rows.length}`;
+
+          return tableHtml(count, ['Link', 'Result', 'Status', 'Redirects', 'Error'], shown);
+        };
+
+        return `<div class="sub">
+            <p class="prose">The probe checked ${esc(formatNum(status.checked))} of ${esc(formatNum(status.candidates))} stored links.</p>
+            ${table('internal', 'Internal links')}
+            ${table('outbound', 'Outbound links')}
+          </div>`;
+      }
+
+      function sitemapUrlsHtml(urls) {
+        if (!urls || !urls.length) return '';
+        const shown = urls.slice(0, SITEMAP_SHOWN).map((entry) => {
+          const href = safeHref(entry.loc);
+          const loc = href ? `<a href="${esc(href)}">${esc(entry.loc)}</a>` : esc(entry.loc);
+          return [`<span class="break">${loc}</span>`, esc(entry.lastmod || 'no lastmod')];
+        });
+        return tableHtml(
+          `Sitemap URLs, showing ${shown.length} of ${urls.length}`,
+          ['URL', 'Lastmod'],
+          shown,
+        );
+      }
+
+      function llmsDetailHtml(detail) {
+        if (!detail) return '';
+        const issues = detail.issues || [];
+        const links = detail.links || [];
+        const parts = [];
+        if (issues.length) {
+          const items = issues
+            .slice(0, LLMS_SHOWN)
+            .map((issue) => {
+              const where = issue.line != null ? ` line ${esc(issue.line)}` : '';
+              const text = issue.text ? ` <span class="muted">${esc(issue.text)}</span>` : '';
+              return `<li><code>${esc(issue.code)}</code>${where}${text}</li>`;
+            })
+            .join('');
+          parts.push(
+            `<div><p class="fields-label">Issues (${esc(issues.length)})</p><ul class="lines">${items}</ul></div>`,
+          );
+        }
+        if (links.length) {
+          const rows = links.slice(0, LLMS_SHOWN).map((link) => {
+            const href = safeHref(link.url);
+            const url = href ? `<a href="${esc(href)}">${esc(link.url)}</a>` : esc(link.url);
+            return [esc(link.title || 'no title'), `<span class="break">${url}</span>`];
+          });
+          parts.push(
+            tableHtml(
+              `llms.txt links, showing ${rows.length} of ${links.length}`,
+              ['Title', 'URL'],
+              rows,
+            ),
+          );
+        }
+        return parts.join('');
+      }
+
+      /* Evidence cards that render only when their data is in the file. */
+      function evidenceCards(doc) {
+        const cards = [
+          [
+            'lighthouse',
+            'Lighthouse',
+            'Lab run on mobile. A lab miss does not change the audit score.',
+            lighthouseHtml(doc.lighthouse),
+          ],
+          [
+            'render',
+            'Chrome render',
+            'The page after JavaScript ran in Chrome. The render adds findings, not score.',
+            renderHtml(doc.render),
+          ],
+          [
+            'https-readiness',
+            'HTTPS readiness',
+            'Local dev server only: what breaks when the page is served over HTTPS.',
+            httpsReadinessHtml(doc.httpsReadiness),
+          ],
+          [
+            'structured-data',
+            'Structured data',
+            'JSON-LD blocks on the page, the type each declares, and the props it lacks.',
+            structuredHtml(doc.structuredData),
+          ],
+          [
+            'citability',
+            'Citability',
+            'Answer blocks in the main content, with their citability dimensions.',
+            citabilityHtml(doc.citability),
+          ],
+          [
+            'headings',
+            'Headings',
+            'The H1 to H3 outline, in document order.',
+            headingsHtml(doc.outline),
+          ],
+          [
+            'images',
+            'Images',
+            'Images on the page that have no alt attribute.',
+            imagesHtml(doc.images),
+          ],
+          [
+            'links',
+            'Links',
+            'Links the probe checked. Broken and redirected links come first.',
+            linksHtml(doc.linkStatus, doc.pageLinks),
+          ],
+        ];
+
+        return cards.filter((card) => card[3]);
+      }
+
+      /* Page extract rows, chunked into natural groups. Unknown labels fall into "Other". */
+      const PAGE_GROUPS = [
+        ['Response', ['Final URL', 'Status', 'Bytes', 'Robots', 'Viewport']],
+        ['Classification', ['Page type', 'Site type', 'Language']],
+        [
+          'Content',
+          [
+            'Title',
+            'Meta description',
+            'H1',
+            'H2 / H3',
+            'Words',
+            'Paragraphs, lists, tables',
+            'Dates',
+            'Author',
+            'Rendering',
+          ],
+        ],
+        ['Canonical and media', ['Canonical', 'Images missing alt']],
+      ];
+
+      function pageGroupsHtml(rows) {
+        const placed = new Set();
+        const groups = PAGE_GROUPS.map(([title, labels]) => {
+          const picked = rows.filter((row) => labels.includes(row.label));
+          for (const row of picked) placed.add(row);
+          return [title, picked];
+        });
+        const rest = rows.filter((row) => !placed.has(row));
+        if (rest.length) groups.push(['Other', rest]);
+        return groups
+          .filter(([, picked]) => picked.length)
+          .map(
+            ([title, picked]) =>
+              `<div class="kv-group"><h4>${esc(title)}</h4>${factsHtml(picked)}</div>`,
+          )
+          .join('');
+      }
+
+      function pageBody(doc) {
+        const extract =
+          Array.isArray(doc.page) && doc.page.length
+            ? pageGroupsHtml(doc.page)
+            : rowsOrNote(
+                doc.page,
+                'The page extract is not in this file.',
+                'The page extract is empty.',
+              );
+        return `<div class="sub">
+            <h3 class="sub-title">Page extract</h3>
+            ${extract}
+          </div>
+          <div class="sub">
+            <h3 class="sub-title">Sitemap</h3>
+            <p class="muted">URLs the site declares to crawlers.</p>
+            ${rowsOrNote(doc.sitemap, 'The sitemap is not in this file.', 'The sitemap is empty.')}
+            ${sitemapUrlsHtml(doc.sitemapUrls)}
+          </div>
+          <div class="sub">
+            <h3 class="sub-title">llms.txt</h3>
+            <p class="muted">Optional file for models. If it is missing, the score does not change.</p>
+            ${rowsOrNote(doc.llms, 'The llms.txt status is not in this file.', 'llms.txt is empty.')}
+            ${llmsDetailHtml(doc.llmsDetail)}
+          </div>
+          <div class="sub">
+            <h3 class="sub-title">Redirects</h3>
+            <p class="muted">Hops to the final URL.</p>
+            ${rowsOrNote(doc.redirects, 'The redirects are not in this file.', 'No redirects in this file.')}
+          </div>
+          <div class="sub">
+            <h3 class="sub-title">CrUX</h3>
+            <p class="muted">Field speed in Chrome. Without a key, it stays out of the score.</p>
+            ${rowsOrNote(doc.crux, 'CrUX is not in this file.', 'CrUX is empty.')}
+          </div>`;
+      }
+
+      const NAV_READ = [
+        ['readiness', 'Result'],
+        ['diagnosis', 'Diagnosis'],
+        ['priority', 'What to fix'],
+        ['findings', 'Findings'],
+      ];
+
+      function render(doc) {
+        const findings = doc.findings || [];
+        const counts = {
+          fails: findings.filter((f) => f.severity === 'fail').length,
+          warns: findings.filter((f) => f.severity === 'warn').length,
+          oks: findings.filter((f) => f.severity === 'pass').length,
+          blockers: (doc.blockers || []).length,
+        };
+        const read = [...NAV_READ];
+        if (doc.checks != null) read.push(['checks', 'Checks']);
+        if (!isBlank(doc.examples)) read.push(['example', 'Example']);
+        if (doc.actions != null) read.push(['actions', 'How to fix']);
+        const labCards = evidenceCards(doc);
+        const evidence = [
+          ['sample', 'Sample'],
+          ['page', 'Page'],
+          ...labCards.map((card) => [card[0], card[1]]),
+          ['crawlers', 'Crawlers'],
+          ['security', 'Security'],
+          ['profile', 'Google profile'],
+          ['search-console', 'Search Console'],
+          ['limits', 'Limits'],
+        ];
+        if (doc.validation != null) evidence.push(['validation', 'Validation']);
+        if (!isBlank(doc.recurrence)) evidence.unshift(['recurrence', 'Recurrence']);
+        const link = ([id, label]) => `<a href="#${id}">${esc(label)}</a>`;
+
+        return `<div class="layout">
+          <nav class="toc" aria-label="Report sections">
+            <p class="toc-group">Read</p>
+            ${read.map(link).join('')}
+            <p class="toc-group">Evidence</p>
+            ${evidence.map(link).join('')}
+          </nav>
+          <div class="main">
+            ${heroHtml(doc, counts)}
+            ${readingHtml(doc)}
+            ${sectionCard('diagnosis', 'Diagnosis', 'What this reading confirms, and what can still improve.', diagnosisHtml(doc))}
+            ${sectionCard('priority', 'What to fix', 'The first item is what holds the score most.', priorityHtml(doc.priority))}
+            ${sectionCard(
+              'findings',
+              'Findings',
+              'Fail needs a fix. Warning needs a second look. Ok passed. Note explains the context, and the id is how you check it in the CLI.',
+              findingsHtml(doc.findings),
+            )}
+            ${doc.checks == null ? '' : sectionCard('checks', 'Checks', 'One row per workstream slug.', checksHtml(doc.checks))}
+            ${isBlank(doc.examples) ? '' : sectionCard('example', 'Example', 'Replacement text for a critical or high finding. One block names the templates it applies to.', examplesHtml(doc.examples))}
+            ${doc.actions == null ? '' : sectionCard('actions', 'How to fix', 'Plan entries in order. Each names the location, the change, the owner, and how to verify it.', actionsHtml(doc.actions))}
+            <div class="block divider-head" id="evidence-head">
+              <header class="block-head">
+                <h2>Evidence</h2>
+                <p class="block-sub">Below is what this reading opened. The order stays in What to fix.</p>
+              </header>
+            </div>
+            ${isBlank(doc.recurrence) ? '' : sectionCard('recurrence', 'Recurrence', 'Findings that changed since the previous run. The state compares the two runs.', recurrenceHtml(doc.recurrence))}
+            ${sectionCard('sample', 'Sample', 'URLs this reading opened.', sampleHtml(doc))}
+            ${sectionCard('page', 'Page', 'What the audited URL HTML contains, plus sitemap, llms.txt, redirects, and CrUX.', pageBody(doc))}
+            ${labCards.map((card) => sectionCard(card[0], card[1], card[2], card[3])).join('')}
+            ${sectionCard('crawlers', 'Crawlers', 'Who robots.txt lets in. The role is the catalog category on the crawler finding.', crawlersHtml(doc.crawlers))}
+            ${sectionCard('security', 'Security', 'Response headers, each recorded as present or absent.', headersHtml(doc.headers))}
+            ${sectionCard('profile', 'Google profile', 'Profile address from the domain. This screen does not call the network.', rowsOrNote(doc.profile, 'The Google profile is not in this file.', 'The profile is empty.'))}
+            ${sectionCard('search-console', 'Search Console', 'Google search data, when this reading includes it.', gscHtml(doc.gsc))}
+            ${sectionCard(
+              'limits',
+              'Limits',
+              'What this reading did not see. An item here is not a page error.',
+              limitsBody(doc),
+            )}
+            ${doc.validation == null ? '' : sectionCard('validation', 'Validation', 'How to check again after the fix.', validationHtml(doc.validation))}
+          </div>
+        </div>`;
+      }
+
+      function applyFilter() {
+        const pressed = reportRoot.querySelector('#filters button[aria-pressed="true"]');
+        const sev = pressed ? pressed.dataset.sev : 'all';
+        const query = (reportRoot.querySelector('#filter-text')?.value || '').trim().toLowerCase();
+        let count = 0;
+        for (const node of reportRoot.querySelectorAll('[data-finding]')) {
+          const blob = node.dataset.blob || '';
+          const show =
+            (sev === 'all' || node.dataset.severity === sev) && (!query || blob.includes(query));
+          node.hidden = !show;
+          if (show) count += 1;
+        }
+        for (const group of reportRoot.querySelectorAll('[data-group]')) {
+          group.hidden = ![...group.querySelectorAll('[data-finding]')].some(
+            (node) => !node.hidden,
+          );
+        }
+        const countNode = reportRoot.querySelector('#count');
+        const empty = reportRoot.querySelector('#filter-empty');
+        if (countNode) countNode.textContent = count === 1 ? '1 finding' : `${count} findings`;
+        if (empty) empty.hidden = count !== 0;
+      }
+
+      function indexFindings() {
+        for (const node of reportRoot.querySelectorAll('[data-finding]')) {
+          node.dataset.blob = node.textContent.toLowerCase();
+        }
+        applyFilter();
+      }
+
+      /* The sticky bar on narrow screens sets --nav-h, which the section scroll margin reads. */
+      function navOffset() {
+        const bar = reportRoot.querySelector('.toc');
+        const narrow = window.matchMedia('(max-width: 59.99rem)').matches;
+        return bar && narrow ? bar.offsetHeight : 0;
+      }
+
+      function syncNavOffset() {
+        document.documentElement.style.setProperty('--nav-h', `${navOffset()}px`);
+      }
+
+      /* Keeps the active chip inside the horizontal chip bar on narrow screens. */
+      function keepChipVisible(link) {
+        const bar = reportRoot.querySelector('.toc');
+        if (!link || !bar || bar.scrollWidth <= bar.clientWidth) return;
+        const left = link.offsetLeft - (bar.clientWidth - link.offsetWidth) / 2;
+        bar.scrollTo({ left: Math.max(0, left), behavior: motionOk() ? 'smooth' : 'auto' });
+      }
+
+      let activeId = '';
+
+      function markActive(id) {
+        if (!id || id === activeId) return;
+        activeId = id;
+        for (const link of reportRoot.querySelectorAll('.toc a')) {
+          if (link.getAttribute('href') === `#${id}`) {
+            link.setAttribute('aria-current', 'true');
+            keepChipVisible(link);
+          } else {
+            link.removeAttribute('aria-current');
+          }
+        }
+      }
+
+      /* The observer marks the top-most section that reaches the upper part of the viewport. */
+      function watchSections() {
+        const sections = [...reportRoot.querySelectorAll('.toc a')]
+          .map((link) => document.getElementById(link.getAttribute('href').slice(1)))
+          .filter(Boolean);
+        syncNavOffset();
+        if (!sections.length) return;
+        if ('IntersectionObserver' in window) {
+          const inView = new Set();
+          const observer = new IntersectionObserver(
+            (entries) => {
+              for (const entry of entries) {
+                if (entry.isIntersecting) inView.add(entry.target.id);
+                else inView.delete(entry.target.id);
+              }
+              /* The section that started most recently in the band is the one being read. */
+              const current = sections.filter((section) => inView.has(section.id)).at(-1);
+              if (current) markActive(current.id);
+            },
+            { rootMargin: `-${navOffset()}px 0px -60% 0px` },
+          );
+          for (const section of sections) observer.observe(section);
+        }
+        const last = sections.at(-1);
+        window.addEventListener(
+          'scroll',
+          () => {
+            if (window.innerHeight + window.scrollY >= document.documentElement.scrollHeight - 4) {
+              markActive(last.id);
+            }
+          },
+          { passive: true },
+        );
+        markActive(sections[0].id);
+      }
+
+      function showReport(doc) {
+        statusNode.hidden = true;
+        statusNode.textContent = '';
+        reportRoot.hidden = false;
+        reportRoot.innerHTML = render(doc);
+        indexFindings();
+        watchSections();
+        fetchedAtNode.textContent = doc.fetchedAt
+          ? formatWhen(doc.fetchedAt)
+          : 'No date in the file.';
+        targetNode.textContent = '';
+        const href = safeHref(doc.url);
+        if (href) {
+          const anchor = document.createElement('a');
+          anchor.href = href;
+          anchor.textContent = doc.url;
+          targetNode.append(anchor);
+        } else {
+          targetNode.textContent = doc.url || 'No URL in the file.';
+        }
+        if (doc.command && commandPill) {
+          commandPill.hidden = false;
+          commandPill.textContent = doc.command;
+        } else if (commandPill) {
+          commandPill.hidden = true;
+        }
+        if (pillCrux) {
+          pillCrux.hidden = false;
+          pillCrux.textContent = doc.cruxAvailable ? 'CrUX in the score' : 'CrUX out of the score';
+          pillCrux.title = doc.cruxNote || '';
+        }
+        if (doc.example) {
+          noticeNode.hidden = false;
+          noticeNode.textContent = 'Structure example, with no measurement.';
+        } else {
+          noticeNode.hidden = true;
+          noticeNode.textContent = '';
+        }
+        skipLink.hidden = false;
+        let host = '';
+        try {
+          host = new URL(doc.url).host;
+        } catch (error) {
+          host = '';
+        }
+        document.title = host ? `SearchUnit Audit, ${host}` : 'SearchUnit Audit';
+        const hashTarget = location.hash ? document.getElementById(location.hash.slice(1)) : null;
+        if (hashTarget) hashTarget.scrollIntoView({ block: 'start', behavior: 'auto' });
+      }
+
+      function applyTheme(theme) {
+        document.documentElement.dataset.theme = theme;
+        const dark = theme === 'dark';
+        themeBtn.setAttribute('aria-pressed', dark ? 'true' : 'false');
+        themeBtn.setAttribute(
+          'aria-label',
+          dark ? 'Switch to the light theme' : 'Switch to the dark theme',
+        );
+      }
+
+      function setTheme(theme) {
+        applyTheme(theme);
+        try {
+          localStorage.setItem('searchunit-audit-theme', theme);
+        } catch (error) {
+          /* the choice lasts only this visit */
+        }
+      }
+
+      themeBtn.addEventListener('click', () => {
+        setTheme(document.documentElement.dataset.theme === 'dark' ? 'light' : 'dark');
+      });
+
+      reportRoot.addEventListener('click', (event) => {
+        const navLink = event.target.closest('.toc a');
+        if (navLink) {
+          event.preventDefault();
+          goTo(navLink.getAttribute('href').slice(1));
+          return;
+        }
+        const summary = event.target.closest('details.action > summary');
+        if (summary) {
+          event.preventDefault();
+          toggleDetails(summary.parentElement);
+          return;
+        }
+        const button = event.target.closest('#filters button');
+        if (!button) return;
+        for (const item of reportRoot.querySelectorAll('#filters button')) {
+          item.setAttribute('aria-pressed', item === button ? 'true' : 'false');
+        }
+        applyFilter();
+      });
+
+      reportRoot.addEventListener('input', (event) => {
+        if (event.target.id === 'filter-text') applyFilter();
+      });
+
+      const reduceMotion = window.matchMedia('(prefers-reduced-motion: reduce)');
+
+      function motionOk() {
+        return !reduceMotion.matches;
+      }
+
+      /* Jump to a section: the hash updates, the heading takes focus, and the scroll is smooth. */
+      function goTo(id, options = {}) {
+        const section = document.getElementById(id);
+        if (!section) return;
+        if (options.push !== false && location.hash !== `#${id}`) {
+          history.pushState(null, '', `#${id}`);
+        }
+        section.querySelector('h2')?.focus({ preventScroll: true });
+        section.scrollIntoView({ behavior: motionOk() ? 'smooth' : 'auto', block: 'start' });
+      }
+
+      /* Accordion: height and opacity animate. A click mid-run reverses from the current height. */
+      function animatePanel(details, panel, from, to, done) {
+        panel.style.overflow = 'hidden';
+        const anim = panel.animate(
+          [
+            { height: `${from}px`, opacity: from > 0 ? 1 : 0 },
+            { height: `${to}px`, opacity: to > 0 ? 1 : 0 },
+          ],
+          { duration: 200, easing: 'cubic-bezier(0.22, 1, 0.36, 1)' },
+        );
+        details._anim = anim;
+        anim.onfinish = () => {
+          panel.style.overflow = '';
+          details._anim = null;
+          if (done) done();
+        };
+      }
+
+      function toggleDetails(details) {
+        const panel = details.querySelector(':scope > div');
+        const willOpen = details.dataset.closing === '1' || !details.open;
+        const fromHeight = panel && details.open ? panel.getBoundingClientRect().height : 0;
+        details._anim?.cancel();
+        details._anim = null;
+        delete details.dataset.closing;
+        if (panel) panel.style.overflow = '';
+        if (!panel || !motionOk() || typeof panel.animate !== 'function') {
+          details.open = willOpen;
+          return;
+        }
+        if (willOpen) {
+          details.open = true;
+          animatePanel(details, panel, fromHeight, panel.scrollHeight);
+        } else {
+          details.dataset.closing = '1';
+          animatePanel(details, panel, fromHeight, 0, () => {
+            details.open = false;
+            delete details.dataset.closing;
+          });
+        }
+      }
+
+      window.addEventListener('popstate', () => {
+        const id = location.hash.slice(1);
+        if (id) goTo(id, { push: false });
+      });
+
+      window.addEventListener('resize', syncNavOffset);
+
+      /* Open every finding and action for print, then restore the closed ones. */
+      window.addEventListener('beforeprint', () => {
+        for (const node of reportRoot.querySelectorAll('details')) {
+          if (!node.open) {
+            node.dataset.printOpened = '1';
+            node.open = true;
+          }
+        }
+      });
+
+      window.addEventListener('afterprint', () => {
+        for (const node of reportRoot.querySelectorAll('details[data-print-opened]')) {
+          node.open = false;
+          delete node.dataset.printOpened;
+        }
+      });
+
+      applyTheme(document.documentElement.dataset.theme === 'dark' ? 'dark' : 'light');
+
+      function boot() {
+        const slot = document.querySelector('#audit-data');
+        const raw = slot ? slot.textContent.trim() : '';
+        if (!raw) {
+          showReport(EXAMPLE);
+          return;
+        }
+        try {
+          showReport(normalize(JSON.parse(raw)));
+        } catch (error) {
+          statusNode.hidden = false;
+          reportRoot.hidden = true;
+          statusNode.textContent = 'The data in this report could not be read.';
+        }
+      }
+
+      boot();
+    </script>
+  </body>
+</html>

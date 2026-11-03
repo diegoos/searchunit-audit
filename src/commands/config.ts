@@ -1,0 +1,401 @@
+import { existsSync } from 'node:fs';
+import type { CliFlags } from '../lib/args.ts';
+import {
+  CONFIG_KEYS,
+  canonicalConfigKey,
+  configFilePath,
+  configLayerValues,
+  effectiveConfigValue,
+  isHomeOnlyConfigKey,
+  mappingGet,
+  mappingSet,
+  mappingUnset,
+  readConfigMapping,
+  writeConfigMapping,
+  type ConfigKey,
+  type ConfigLayerValues,
+} from '../lib/config.ts';
+import { CliError } from '../lib/errors.ts';
+import { printJson, renderAgentMarkdown, stripControls } from '../lib/output.ts';
+import { formatTable } from '../lib/table.ts';
+import { theme } from '../lib/theme.ts';
+
+const NOT_SET = 'not set';
+const REDACTED = '[redacted]';
+
+interface ConfigDirs {
+  cwd?: string;
+  home?: string;
+}
+
+/** `local`, `global`, and `default` as JSON: a missing value is `null`. */
+interface JsonLayers {
+  local: string | null;
+  global: string | null;
+  default: string | null;
+}
+
+const SECRET_YAML_NAMES = [
+  'crux_api_key',
+  'CRUX_API_KEY',
+  'gsc_access_token',
+  'GSC_ACCESS_TOKEN',
+] as const;
+
+function redactMappingForJson(record: Record<string, unknown>): Record<string, unknown> {
+  const next = { ...record };
+
+  for (const name of SECRET_YAML_NAMES) {
+    const value = next[name];
+
+    if (typeof value === 'string' && value.trim()) {
+      next[name] = REDACTED;
+    }
+  }
+
+  return next;
+}
+
+function redactSecret(key: ConfigKey, value: string): string {
+  return (key === 'crux_api_key' || key === 'gsc_access_token') && value.trim() ? REDACTED : value;
+}
+
+/** Table cell for one layer value. Missing shows as "not set"; secrets are redacted. */
+function displayLayerForTable(key: ConfigKey, value: string | undefined): string {
+  if (value === undefined) {
+    return theme.dim(NOT_SET);
+  }
+
+  return redactSecret(key, stripControls(value));
+}
+
+function assertWritableScope(key: ConfigKey, flags: CliFlags): void {
+  if (isHomeOnlyConfigKey(key) && !flags.global) {
+    throw new CliError(
+      `${key} must use -g/--global ($HOME/.searchunit.yaml); project cwd YAML is not applied`,
+      2,
+    );
+  }
+}
+
+/** JSON layer fields for one key. Secrets in the home-only keys are redacted. */
+function layerJson(key: ConfigKey, layer: ConfigLayerValues): JsonLayers {
+  const json: JsonLayers = {
+    local: layer.local ?? null,
+    global: layer.global ?? null,
+    default: layer.default ?? null,
+  };
+  if (!isHomeOnlyConfigKey(key)) {
+    return json;
+  }
+
+  return {
+    local: json.local ? redactSecret(key, json.local) : json.local,
+    global: json.global ? redactSecret(key, json.global) : json.global,
+    default: json.default,
+  };
+}
+
+/**
+ * Gets, sets, or removes keys in `.searchunit.yaml`.
+ * `-g/--global` selects `$HOME`; otherwise the current directory.
+ */
+export async function runConfig(
+  target: string | undefined,
+  flags: CliFlags,
+  dirs: ConfigDirs = {},
+): Promise<number> {
+  const path = configFilePath({ global: flags.global, cwd: dirs.cwd, home: dirs.home });
+
+  if (target === 'list') {
+    if (flags.rest.length > 0) {
+      throw new CliError('Too many arguments. Example: searchunit config list', 2);
+    }
+
+    return listFile(path, flags);
+  }
+
+  if (target === 'set') {
+    return runSet(path, flags, dirs);
+  }
+
+  if (target === 'remove') {
+    return runRemove(path, flags, dirs);
+  }
+
+  if (flags.rest.length > 0) {
+    throw new CliError('Too many arguments. Example: searchunit config set output json', 2);
+  }
+
+  if (target) {
+    return getKey(path, target, flags, dirs);
+  }
+
+  return listKeys(path, flags, dirs);
+}
+
+/** Writes one key from `config set <key> <value>`. */
+function runSet(path: string, flags: CliFlags, dirs: ConfigDirs): number {
+  if (flags.rest.length > 2) {
+    throw new CliError('Too many arguments. Example: searchunit config set output json', 2);
+  }
+
+  const [raw, value] = flags.rest;
+
+  if (raw === undefined) {
+    throw new CliError('A config key is required. Example: searchunit config set output json', 2);
+  }
+
+  if (value === undefined) {
+    throw new CliError('A value is required. Example: searchunit config set output json', 2);
+  }
+
+  return setKey(path, raw, value, flags, dirs);
+}
+
+/** Deletes one key from `config remove <key>`. */
+function runRemove(path: string, flags: CliFlags, dirs: ConfigDirs): number {
+  if (flags.rest.length > 1) {
+    throw new CliError('Too many arguments. Example: searchunit config remove output', 2);
+  }
+
+  return removeKey(path, flags.rest[0], flags, dirs);
+}
+
+/** Resolves a config key name, or rejects a missing or unknown one. */
+function requireKey(raw: string | undefined): ConfigKey {
+  if (!raw) {
+    throw new CliError('A config key is required. Example: searchunit config set output json', 2);
+  }
+
+  const key = canonicalConfigKey(raw);
+
+  if (!key) {
+    throw new CliError(
+      `Unknown config key "${raw}". Expected one of: ${CONFIG_KEYS.join(', ')}`,
+      2,
+    );
+  }
+
+  return key;
+}
+
+/** Lists keys from the selected YAML file only (cwd, or `$HOME` with `-g`). */
+function listFile(path: string, flags: CliFlags): number {
+  const mapping = readConfigMapping(path) ?? {};
+  const scope = flags.global ? 'Global' : 'Local';
+
+  printConfigView(flags, {
+    subtitle: flags.global ? 'list global' : 'list local',
+    files: [configFileLine(scope, path)],
+    json: {
+      ok: true,
+      command: 'config',
+      action: 'list',
+      path,
+      global: Boolean(flags.global),
+      values: redactMappingForJson(mapping),
+    },
+    headers: ['Key', 'Value'],
+    rows: CONFIG_KEYS.map((key) => [key, displayLayerForTable(key, mappingGet(mapping, key))]),
+  });
+
+  return 0;
+}
+
+function listKeys(path: string, flags: CliFlags, dirs: ConfigDirs): number {
+  const layers = CONFIG_KEYS.map((key) => ({ key, layer: configLayerValues(key, dirs) }));
+
+  printConfigView(flags, {
+    files: configFileLines(dirs),
+    json: {
+      ok: true,
+      command: 'config',
+      path,
+      global: Boolean(flags.global),
+      values: redactMappingForJson(readConfigMapping(path) ?? {}),
+      layers: Object.fromEntries(layers.map(({ key, layer }) => [key, layerJson(key, layer)])),
+    },
+    headers: ['Key', 'Local', 'Global', 'Default', 'Effective'],
+    rows: layers.map(({ key, layer }) => [
+      key,
+      displayLayerForTable(key, layer.local),
+      displayLayerForTable(key, layer.global),
+      displayLayerForTable(key, layer.default),
+      displayLayerForTable(key, effectiveConfigValue(key, layer)),
+    ]),
+  });
+
+  return 0;
+}
+
+function getKey(path: string, raw: string, flags: CliFlags, dirs: ConfigDirs): number {
+  const key = requireKey(raw);
+  const layer = configLayerValues(key, dirs);
+  const value = effectiveConfigValue(key, layer);
+  const layersJson = layerJson(key, layer);
+
+  printConfigView(flags, {
+    subtitle: key,
+    files: configFileLines(dirs),
+    json: {
+      ok: true,
+      command: 'config',
+      path,
+      key,
+      ...layersJson,
+      value: jsonSecretValue(key, value),
+    },
+    headers: ['Field', 'Value'],
+
+    rows: layerRows(key, layer),
+  });
+
+  return 0;
+}
+
+function setKey(
+  path: string,
+  raw: string,
+  value: string,
+  flags: CliFlags,
+  dirs: ConfigDirs,
+): number {
+  const key = requireKey(raw);
+
+  assertWritableScope(key, flags);
+  const created = !existsSync(path);
+  const next = mappingSet(readConfigMapping(path) ?? {}, key, value);
+
+  writeConfigMapping(path, next);
+  const stored = mappingGet(next, key) ?? value.trim();
+  const layer = configLayerValues(key, dirs);
+
+  printConfigView(flags, {
+    files: configFileLines(dirs),
+    subtitle: `set ${key}`,
+    json: {
+      ok: true,
+      command: 'config',
+      path,
+      action: 'set',
+      key,
+      value: jsonSecretValue(key, stored),
+      created,
+      ...layerJson(key, layer),
+    },
+    headers: ['Field', 'Value'],
+
+    rows: layerRows(key, layer),
+  });
+  announceWrite(path, created, flags);
+
+  return 0;
+}
+
+/** Deletes one key from the selected YAML file. */
+function removeKey(
+  path: string,
+  raw: string | undefined,
+  flags: CliFlags,
+  dirs: ConfigDirs,
+): number {
+  const key = requireKey(raw);
+
+  assertWritableScope(key, flags);
+  const { record, removed } = mappingUnset(readConfigMapping(path) ?? {}, key);
+
+  if (!removed) {
+    throw new CliError(`key "${key}" is not set in ${path}`, 1);
+  }
+
+  writeConfigMapping(path, record);
+  const layer = configLayerValues(key, dirs);
+
+  printConfigView(flags, {
+    files: configFileLines(dirs),
+    subtitle: `remove ${key}`,
+    json: {
+      ok: true,
+      command: 'config',
+      path,
+      action: 'remove',
+      key,
+      ...layerJson(key, layer),
+    },
+    headers: ['Field', 'Value'],
+
+    rows: layerRows(key, layer),
+  });
+  announceWrite(path, false, flags);
+
+  return 0;
+}
+
+function printConfigView(
+  flags: CliFlags,
+  opts: {
+    subtitle?: string;
+    files: string[];
+    json: unknown;
+    headers: string[];
+    rows: string[][];
+  },
+): void {
+  if (flags.agent) {
+    process.stdout.write(renderAgentMarkdown(opts.json));
+
+    return;
+  }
+
+  if (flags.json) {
+    printJson(opts.json);
+
+    return;
+  }
+
+  const heading = opts.subtitle
+    ? `${theme.title('Config')}  ${theme.dim(opts.subtitle)}`
+    : theme.title('Config');
+  console.log(
+    ['', heading, '', ...opts.files, '', formatTable(opts.headers, opts.rows)].join('\n'),
+  );
+}
+
+function configFileLines(dirs: ConfigDirs): string[] {
+  return [
+    configFileLine('Local', configFilePath({ ...dirs, global: false })),
+    configFileLine('Global', configFilePath({ ...dirs, global: true })),
+  ];
+}
+
+function configFileLine(label: string, path: string): string {
+  return `${theme.dim(label.padEnd(6))}  ${theme.url(path)}`;
+}
+
+function layerRows(key: ConfigKey, layer: ConfigLayerValues): string[][] {
+  return [
+    ['Local', displayLayerForTable(key, layer.local)],
+    ['Global', displayLayerForTable(key, layer.global)],
+    ['Default', displayLayerForTable(key, layer.default)],
+    ['Effective', displayLayerForTable(key, effectiveConfigValue(key, layer))],
+  ];
+}
+
+function jsonSecretValue(key: ConfigKey, value: string | null | undefined): string | null {
+  if (value === undefined || value === null) {
+    return null;
+  }
+
+  return redactSecret(key, value);
+}
+
+function announceWrite(path: string, created: boolean, flags: CliFlags): void {
+  if (flags.silent) {
+    return;
+  }
+
+  const verb = created ? 'Created' : 'Updated';
+
+  console.error(`\n${theme.ok(verb)} ${path}`);
+}

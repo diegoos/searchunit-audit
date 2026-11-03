@@ -1,0 +1,32 @@
+# Copy to .searchunit.yaml in the project directory or $HOME/.searchunit.yaml
+# Flags override these values.
+
+# Optional Chrome UX Report key (missing CrUX is not a failure).
+# Applied from $HOME/.searchunit.yaml, flags, or CRUX_API_KEY — not from a project cwd file.
+crux_api_key: ""
+
+# Optional Search Console OAuth access token (missing token skips `gsc`; not a failure).
+# About one hour. Applied from $HOME/.searchunit.yaml or GSC_ACCESS_TOKEN — not from a project cwd file.
+# An API key cannot read Search Console property data.
+gsc_access_token: ""
+
+# Optional Google Cloud project billed for Search Console (`x-goog-user-project`).
+# Project id or project number. Applied from $HOME/.searchunit.yaml, GSC_QUOTA_PROJECT,
+# or GOOGLE_CLOUD_QUOTA_PROJECT — not from a project cwd file.
+gsc_quota_project: ""
+
+# Optional path to a Search Console service account JSON key.
+# The CLI signs a webmasters.readonly JWT and exchanges it for an access token.
+# Applied from $HOME/.searchunit.yaml or GSC_CREDENTIALS — not from a project cwd file.
+# GOOGLE_APPLICATION_CREDENTIALS is used when that file is a service account key.
+gsc_credentials: ""
+
+# Default --format when the flag is omitted.
+# table | json apply to every command. html | markdown are audit --format only;
+# other commands fall back to table if this is set to html or markdown.
+output: table
+
+# Response body cap. Integer bytes, or kb/mb (1024-based). Default 2mb. Range 1kb–32mb.
+# A body over the cap is an error. The CLI does not return truncated bytes.
+# cwd .searchunit.yaml overlays $HOME for this key. Flags override YAML.
+max_body_bytes: 2mb
