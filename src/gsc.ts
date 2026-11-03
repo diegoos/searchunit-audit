@@ -94,7 +94,7 @@ export interface GscAuth {
 
 type CredentialSource =
   | { kind: 'token'; token: string }
-  | { kind: 'service_account'; path: string; projectId?: string }
+  | { kind: 'service_account'; credentials: Auth.JWTInput; projectId?: string }
   | { skip: JsonRecord };
 
 /** One Search Console read. `gsc URL` runs every read. */
@@ -331,11 +331,12 @@ export async function gscAuth(explicit?: string): Promise<GscAuth | { skip: Json
   const quota = resolveQuotaProject(source.projectId);
 
   try {
-    const auth = new google.auth.GoogleAuth({
-      keyFile: source.path,
+    // The JWT constructor is the non-deprecated service-account client: GoogleAuth options warn on stderr.
+    const client = new google.auth.JWT({
+      email: source.credentials.client_email,
+      key: source.credentials.private_key,
       scopes: [GSC_SCOPE],
     });
-    const client = (await auth.getClient()) as Auth.OAuth2Client;
 
     client.quotaProjectId = quota.id;
 
@@ -413,7 +414,7 @@ function credentialSource(explicit: string | undefined): CredentialSource {
   const loaded = readServiceAccountMeta(path);
 
   if (loaded.kind === 'service_account') {
-    return { kind: 'service_account', path, projectId: loaded.projectId };
+    return loaded;
   }
 
   // A missing ADC file, or one that is not a service account, is no GSC credential.
@@ -429,11 +430,11 @@ function credentialSource(explicit: string | undefined): CredentialSource {
   };
 }
 
-/** Reads `type` and `project_id`. The private key stays in the file for googleapis. */
+/** Parses the key file once: googleapis gets the object, and `project_id` feeds the quota fallback. */
 function readServiceAccountMeta(
   path: string,
 ):
-  | { kind: 'service_account'; projectId?: string }
+  | { kind: 'service_account'; credentials: Auth.JWTInput; projectId?: string }
   | { kind: 'other' }
   | { kind: 'error'; message: string } {
   let raw: string;
@@ -444,14 +445,9 @@ function readServiceAccountMeta(
     return { kind: 'error', message: 'cannot read credentials' };
   }
 
-  let parsed: {
-    type?: unknown;
-    client_email?: unknown;
-    private_key?: unknown;
-    project_id?: unknown;
-  };
+  let parsed: Auth.JWTInput;
   try {
-    parsed = JSON.parse(raw) as typeof parsed;
+    parsed = JSON.parse(raw) as Auth.JWTInput;
   } catch {
     return { kind: 'error', message: 'expected a service account key' };
   }
@@ -472,7 +468,7 @@ function readServiceAccountMeta(
 
   const projectId = typeof parsed.project_id === 'string' ? parsed.project_id.trim() : '';
 
-  return { kind: 'service_account', projectId: projectId || undefined };
+  return { kind: 'service_account', credentials: parsed, projectId: projectId || undefined };
 }
 
 /** Refuses a user token whose scopes are not the read-only allowlist. */
