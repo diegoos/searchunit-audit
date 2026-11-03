@@ -377,9 +377,8 @@ function iframeHeaderRule({ cli, page }) {
   const headers = SECURITY_HEADERS.filter(
     (id) => !(loopback && id === 'strict-transport-security'),
   );
-  const flagged = headers.filter(
-    (id) => flaggedIds(cli, new RegExp(`^security:${id}$`)).length > 0,
-  );
+  const securityIds = flaggedIds(cli, /^security:/);
+  const flagged = headers.filter((id) => securityIds.includes(`security:${id}`));
 
   return flagged.length > 0
     ? observed(`Missing or weak: ${flagged.join(', ')}.`)

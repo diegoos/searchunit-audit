@@ -783,7 +783,7 @@ function checkRecurrence(sections, cli, previous, problems) {
       continue;
     }
 
-    const found = [...RECURRENCE_STATES].find((word) => new RegExp(`\\b${word}\\b`).test(line));
+    const found = line.match(/\b(new|recurring|worsened|improved|resolved)\b/)?.[1];
 
     if (found !== state) {
       problems.push(`Recurrence \`${id}\`: state ${state} expected, found ${found ?? 'none'}`);
