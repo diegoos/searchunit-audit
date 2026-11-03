@@ -186,3 +186,12 @@ jobs:
             sleep 0.5
           done
           node dist/cli.js meta-check http://localhost:8137/smoke.html --format=json --silent
+
+      - name: Audit and skill prefill on Node
+        run: |
+          set -euo pipefail
+          trap 'cat audit.err >&2 || true' ERR
+          node dist/cli.js audit http://localhost:8137/smoke.html --agent --silent -o audit.json > audit.md 2> audit.err
+          test -s audit.md
+          node skills/searchunit-audit/scripts/prefill-checks.mjs --cli audit.json --out checks-prefill.json
+          test -s checks-prefill.json
