@@ -99,6 +99,7 @@ Flags override YAML. `CRUX_API_KEY`, `GSC_ACCESS_TOKEN`, `GSC_QUOTA_PROJECT`, an
 - CLI code (`src/`, `tests/`) never reads or imports `skills/`.
 - Skill code never imports `src/` or `tests/`. It reads the JSON payload the CLI writes and calls the binary the run names: `searchunit`, `npx --yes @searchunit/cli`, or `bun <repo>/src/index.ts`.
 - `bunfig.toml` limits root `bun test` to `tests/`. Skill tests run with `bun run test:skill`.
+- A local test of the skill or the CLI runs the local source (`bun <repo>/src/index.ts`). The published npm package can lag the repo, so its payload is not a test target.
 
 ## Done when
 
