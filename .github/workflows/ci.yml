@@ -125,4 +125,32 @@ jobs:
           node-version: ${{ matrix.node-version }}
 
       - run: node dist/cli.js --help
-      - run: node dist/cli.js meta-check https://searchunit.io/ --format=json --silent
+
+      - name: Serve a local fixture page
+        run: |
+          cat > smoke.html <<'EOF'
+          <!doctype html>
+          <html lang="en">
+          <head>
+          <meta charset="utf-8">
+          <title>CI smoke fixture for the SearchUnit meta-check run</title>
+          <meta name="description" content="A static fixture page served on localhost for the SearchUnit CLI smoke test in CI. It carries every tag the meta check reads so the analyzer status is a pass.">
+          <link rel="canonical" href="http://localhost:8137/smoke.html">
+          <meta name="viewport" content="width=device-width, initial-scale=1">
+          <meta name="robots" content="index, follow">
+          <meta property="og:title" content="CI smoke fixture for the SearchUnit meta-check run">
+          <meta property="og:description" content="A static fixture page served on localhost for the SearchUnit CLI smoke test in CI.">
+          <meta property="og:image" content="http://localhost:8137/og.png">
+          <meta property="og:url" content="http://localhost:8137/smoke.html">
+          <meta property="og:type" content="website">
+          <meta name="twitter:card" content="summary">
+          <meta name="twitter:title" content="CI smoke fixture for the SearchUnit meta-check run">
+          <meta name="twitter:description" content="A static fixture page served on localhost for the SearchUnit CLI smoke test in CI.">
+          <meta name="twitter:image" content="http://localhost:8137/og.png">
+          </head>
+          <body><h1>CI smoke fixture</h1></body>
+          </html>
+          EOF
+          python3 -m http.server 8137 --bind 127.0.0.1 &
+
+      - run: sleep 1 && node dist/cli.js meta-check http://localhost:8137/smoke.html --format=json --silent
