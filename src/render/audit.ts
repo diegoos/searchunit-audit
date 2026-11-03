@@ -282,12 +282,15 @@ function renderTable(report: AuditReport): string {
   return lines.join('\n');
 }
 
+const HTML_ESCAPES: Record<string, string> = {
+  '&': '&amp;',
+  '<': '&lt;',
+  '>': '&gt;',
+  '"': '&quot;',
+};
+
 function escapeHtml(value: string): string {
-  return stripControls(value)
-    .replaceAll('&', '&amp;')
-    .replaceAll('<', '&lt;')
-    .replaceAll('>', '&gt;')
-    .replaceAll('"', '&quot;');
+  return stripControls(value).replace(/[&<>"]/g, (ch) => HTML_ESCAPES[ch]!);
 }
 
 const HTML_STYLE = `    body { font-family: ui-sans-serif, system-ui, sans-serif; margin: 2rem; color: #111; }

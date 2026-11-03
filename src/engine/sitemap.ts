@@ -48,9 +48,21 @@ function foldAsciiAtoZ(s: string): string {
 }
 
 /** Closed `<prefix:local>` inners. Stops at the first unclosed open (linear in body length). */
+const OPEN_RES: Record<string, RegExp> = {
+  url: /<(?:(\w+):)?url\b[^>]*>/gi,
+  loc: /<(?:(\w+):)?loc\b[^>]*>/gi,
+  lastmod: /<(?:(\w+):)?lastmod\b[^>]*>/gi,
+};
+
 function elementInners(xml: string, localName: string, limit = Infinity): string[] {
   const folded = foldAsciiAtoZ(xml);
-  const openRe = new RegExp(`<(?:(\\w+):)?${localName}\\b[^>]*>`, 'gi');
+  const openRe = OPEN_RES[localName];
+
+  if (openRe === undefined) {
+    throw new Error(`unsupported element name: ${localName}`);
+  }
+
+  openRe.lastIndex = 0;
   const out: string[] = [];
   let m: RegExpExecArray | null;
 

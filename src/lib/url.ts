@@ -120,9 +120,17 @@ function headerUrl(raw: string, base: string): string | null {
 }
 
 function quotedParam(part: string, name: string): string | null {
-  const match = new RegExp(`${name}=(?:"([^"]+)"|([^;\\s]+))`, 'i').exec(part);
+  const start = part.toLowerCase().indexOf(`${name.toLowerCase()}=`);
 
-  return (match?.[1] ?? match?.[2] ?? '').trim() || null;
+  if (start === -1) {
+    return null;
+  }
+
+  const raw = part.slice(start + name.length + 1);
+  const close = raw.startsWith('"') ? raw.indexOf('"', 1) : -1;
+  const value = close > 1 ? raw.slice(1, close) : raw.split(/[;\s]/, 1)[0]!;
+
+  return value.trim() || null;
 }
 
 /** Reads canonical and hreflang from an HTTP `Link` header. */

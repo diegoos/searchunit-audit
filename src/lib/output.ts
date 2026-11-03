@@ -47,20 +47,24 @@ export function clipDetail(value: string, max = DETAIL_CAP): string {
 export type CheckStatus = 'pass' | 'warn' | 'fail';
 
 /** Escapes remote strings for Markdown so HTML and table cells stay inert. */
+const MARKDOWN_ESCAPES: Record<string, string> = {
+  '&': '&amp;',
+  '<': '&lt;',
+  '>': '&gt;',
+  '\\': '\\\\',
+  '|': '\\|',
+  '\n': ' ',
+  '#': '\\#',
+  '*': '\\*',
+  _: '\\_',
+  '[': '\\[',
+  ']': '\\]',
+  '`': '\\`',
+};
+
+/** Escapes remote strings for Markdown so HTML and table cells stay inert. */
 export function escapeMarkdown(value: string): string {
-  return stripControls(value)
-    .replaceAll('&', '&amp;')
-    .replaceAll('<', '&lt;')
-    .replaceAll('>', '&gt;')
-    .replaceAll('\\', '\\\\')
-    .replaceAll('|', '\\|')
-    .replaceAll('\n', ' ')
-    .replaceAll('#', '\\#')
-    .replaceAll('*', '\\*')
-    .replaceAll('_', '\\_')
-    .replaceAll('[', '\\[')
-    .replaceAll(']', '\\]')
-    .replaceAll('`', '\\`');
+  return stripControls(value).replace(/[&<>\\|\n#*_[\]`]/g, (ch) => MARKDOWN_ESCAPES[ch]!);
 }
 
 export interface CheckRow {

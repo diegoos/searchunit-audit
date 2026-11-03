@@ -261,7 +261,10 @@ function anchorNameParts(
 }
 
 function directiveToken(text: string, token: string): boolean {
-  return new RegExp(`(?:^|[\\s,])${token}(?:$|[\\s,])`, 'i').test(text);
+  return text
+    .toLowerCase()
+    .split(/[\s,]+/)
+    .includes(token.toLowerCase());
 }
 
 function readSnippetDirectives(contents: string[], dataNosnippet: boolean): SnippetDirectives {
