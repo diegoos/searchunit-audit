@@ -286,6 +286,38 @@ const OBSERVED_CASES: ObservedCase[] = [
     { result: 'observed', note: 'Missing social tag: og:image.' },
   ],
   [
+    'a missing social tag lists the flagged CLI ids, and meta:og_url stays out',
+    {
+      ...withPage({
+        social: {
+          openGraph: { title: 'Widgets for teams', image: null, type: 'article' },
+          twitter: { card: 'summary' },
+        },
+      }),
+      findings: [
+        { id: 'meta:og_image', severity: 'warn' },
+        { id: 'meta:og_url', severity: 'warn' },
+      ],
+    },
+    'social-tags',
+    { result: 'observed', note: 'Missing social tag: og:image. CLI flags: meta:og_image.' },
+  ],
+  [
+    'social tag findings that warn or fail name their ids',
+    {
+      ...payload(),
+      findings: [
+        { id: 'meta:og_image', severity: 'warn' },
+        { id: 'meta:twitter_card', severity: 'fail' },
+      ],
+    },
+    'social-tags',
+    {
+      result: 'observed',
+      note: 'Social tag findings warn or fail: meta:og_image, meta:twitter_card.',
+    },
+  ],
+  [
     'a JSON-LD block with no @type makes schema-inventory observed',
     withPage({
       markupFormats: { microdata_types: [], rdfa_types: [], jsonld_blocks_missing_type: 1 },
@@ -440,6 +472,39 @@ const RUN_CASES: RunCase[] = [
     { result: 'observed', note: 'Missing or weak: x-frame-options.' },
   ],
   [
+    'an advisory security warn outside the five headers names its id',
+    runPayload({
+      root: {
+        findings: [...SECURITY_PASS, { id: 'security:permissions-policy', severity: 'warn' }],
+      },
+    }),
+    {},
+    'iframe-header',
+    {
+      result: 'not observed',
+      note: 'Present: strict-transport-security, content-security-policy, x-frame-options, x-content-type-options, referrer-policy. Advisory warn: security:permissions-policy.',
+    },
+  ],
+  [
+    'a missing header plus advisory warns names them all',
+    runPayload({
+      root: {
+        findings: [
+          ...SECURITY_PASS.filter((item) => item.id !== 'security:x-frame-options'),
+          { id: 'security:x-frame-options', severity: 'fail' },
+          { id: 'security:permissions-policy', severity: 'warn' },
+          { id: 'security:cross-origin-opener-policy', severity: 'warn' },
+        ],
+      },
+    }),
+    {},
+    'iframe-header',
+    {
+      result: 'observed',
+      note: 'Missing or weak: x-frame-options. Advisory warn: security:permissions-policy, security:cross-origin-opener-policy.',
+    },
+  ],
+  [
     'a title inside the band',
     runPayload(),
     {},
@@ -482,6 +547,19 @@ const RUN_CASES: RunCase[] = [
     {},
     'meta-length-uniqueness',
     { result: 'not observed' },
+  ],
+  [
+    'a description inside the band with a CLI warn names its level',
+    {
+      ...runPayload(),
+      findings: [...SECURITY_PASS, { id: 'meta:description', severity: 'warn' }],
+    },
+    {},
+    'meta-length-uniqueness',
+    {
+      result: 'not observed',
+      note: 'Meta description is 140 characters, inside 70-165, and no context URL repeats it. meta:description is warn (CLI ideal 150-160).',
+    },
   ],
   [
     'no answer format at all',
@@ -604,6 +682,36 @@ const RUN_CASES: RunCase[] = [
     'same-as',
     { result: 'observed', evidence: 'direct' },
   ],
+  ...['https://app.localhost/', 'https://printer.local/', 'https://db.corp.internal/'].map(
+    (url): RunCase => [
+      `a sameAs on the private name ${url}`,
+      runPayload({
+        page: {
+          structuredData: {
+            types: ['Organization'],
+            blocks: [{ type: 'Organization', sameAs: [url] }],
+          },
+        },
+      }),
+      {},
+      'same-as',
+      { result: 'observed', evidence: 'direct', note: `Unsafe sameAs: "${url}".` },
+    ],
+  ),
+  ...['https://example.com/', 'https://localhost.example.com/'].map((url): RunCase => [
+    `a sameAs on the public name ${url}`,
+    runPayload({
+      page: {
+        structuredData: {
+          types: ['Organization'],
+          blocks: [{ type: 'Organization', sameAs: [url] }],
+        },
+      },
+    }),
+    {},
+    'same-as',
+    { result: 'not observed', evidence: 'proxy' },
+  ]),
   [
     'no Search Console file',
     runPayload(),

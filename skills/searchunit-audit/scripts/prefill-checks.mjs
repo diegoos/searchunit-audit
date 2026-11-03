@@ -28,8 +28,11 @@ const SECURITY_HEADERS = [
 ];
 const ENTITY_TYPES = ['Organization', 'Person'];
 // A sameAs host that points inside a network, never at a public profile (workstreams.md same-as).
+// PRIVATE_HOST covers the IP ranges; PRIVATE_HOST_SUFFIX mirrors isBlockedHostname in
+// src/ip-policy.ts: localhost, *.localhost, *.local, *.internal.
 const PRIVATE_HOST =
   /^(?:localhost\.?|metadata\.google\.internal\.?|::|::1|::(?:[0-9a-f]{1,4}:)?[0-9a-f]{1,4}|0\.\d+\.\d+\.\d+|127\.\d+\.\d+\.\d+|10\.\d+\.\d+\.\d+|172\.(?:1[6-9]|2\d|3[01])\.\d+\.\d+|192\.168\.\d+\.\d+|169\.254\.\d+\.\d+|100\.(?:6[4-9]|[7-9]\d|1[01]\d|12[0-7])\.\d+\.\d+|198\.(?:18|19)\.\d+\.\d+|2(?:2[4-9]|3\d|4\d|5[0-5])\.\d+\.\d+\.\d+|::ffff:.+|f[cd][0-9a-f]{2}:.*|fe[89ab][0-9a-f]:.*|ff[0-9a-f]{2}:.*)$/;
+const PRIVATE_HOST_SUFFIX = /(?:^|\.)localhost$|\.(?:local|internal)$/;
 const args = process.argv.slice(2);
 
 function argValue(name) {
@@ -253,11 +256,16 @@ function socialTagsRule({ cli, page }) {
   ]
     .filter(([, value]) => value == null)
     .map(([name]) => name);
+  const cliFlags = flaggedIds(cli, /^meta:(og_(?!url$)|twitter_|og-image-hero)/);
 
-  if (missing.length > 0) return observed(`Missing social tag: ${missing.join(', ')}.`);
+  if (missing.length > 0) {
+    const flags = cliFlags.length > 0 ? ` CLI flags: ${cliFlags.join(', ')}.` : '';
+
+    return observed(`Missing social tag: ${missing.join(', ')}.${flags}`);
+  }
   // meta:og_url maps to the canonical slug in cli-facts.md, not to social-tags.
-  if (flaggedIds(cli, /^meta:(og_(?!url$)|twitter_|og-image-hero)/).length > 0) {
-    return observed('A social tag finding warns or fails.');
+  if (cliFlags.length > 0) {
+    return observed(`Social tag findings warn or fail: ${cliFlags.join(', ')}.`);
   }
   if (page.title && normalize(openGraph.title) !== normalize(page.title)) {
     return observed('og:title differs from the page title.');
@@ -313,18 +321,28 @@ function titleLengthRule({ page, contexts }) {
   });
 }
 
-function metaLengthRule({ page, contexts }) {
+function metaLengthRule({ cli, page, contexts }) {
   if (page.metaDescription == null || page.metaDescription.trim() === '') {
     return observed('The meta description is empty.');
   }
 
-  return lengthRule({
+  const row = lengthRule({
     value: page.metaDescription,
     band: DESCRIPTION_BAND,
     label: 'Meta description',
     contexts,
     field: 'metaDescription',
   });
+  const finding = (cli.findings ?? []).find((item) => item.id === 'meta:description');
+  const level = finding == null ? null : findingLevel(finding);
+
+  if (row?.result === NOT_OBSERVED && (level === 'warn' || level === 'fail')) {
+    return notObserved(
+      `Meta description is ${page.metaDescription.trim().length} characters, inside ${DESCRIPTION_BAND[0]}-${DESCRIPTION_BAND[1]}, and no context URL repeats it. meta:description is ${level} (CLI ideal 150-160).`,
+    );
+  }
+
+  return row;
 }
 
 function crawlerStatuses(discovery) {
@@ -377,12 +395,15 @@ function iframeHeaderRule({ cli, page }) {
   const headers = SECURITY_HEADERS.filter(
     (id) => !(loopback && id === 'strict-transport-security'),
   );
+  const scored = new Set(headers.map((id) => `security:${id}`));
   const securityIds = flaggedIds(cli, /^security:/);
   const flagged = headers.filter((id) => securityIds.includes(`security:${id}`));
+  const advisory = securityIds.filter((id) => !scored.has(id));
+  const note = advisory.length > 0 ? ` Advisory warn: ${advisory.join(', ')}.` : '';
 
   return flagged.length > 0
-    ? observed(`Missing or weak: ${flagged.join(', ')}.`)
-    : notObserved(`Present: ${headers.join(', ')}.`);
+    ? observed(`Missing or weak: ${flagged.join(', ')}.${note}`)
+    : notObserved(`Present: ${headers.join(', ')}.${note}`);
 }
 
 function crawlerStatus(discovery, bot) {
@@ -450,13 +471,17 @@ function platformCopilotRule({ page, discovery }) {
 function isUnsafeSameAs(value) {
   try {
     const url = new URL(value);
-    const host = url.hostname.toLowerCase().replace(/^\[|\]$/g, '');
+    const host = url.hostname
+      .toLowerCase()
+      .replace(/^\[|\]$/g, '')
+      .replace(/\.$/, '');
 
     return (
       url.protocol !== 'https:' ||
       url.username !== '' ||
       url.password !== '' ||
-      PRIVATE_HOST.test(host)
+      PRIVATE_HOST.test(host) ||
+      PRIVATE_HOST_SUFFIX.test(host)
     );
   } catch {
     return true;
