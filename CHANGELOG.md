@@ -4,6 +4,21 @@ Versions follow Semantic Versioning. Notes stay under Unreleased until `package.
 
 ## Unreleased
 
+### Added
+
+- `discovery.securityHeaders` carries the raw `Permissions-Policy`, `Cross-Origin-Opener-Policy`, `Cross-Origin-Embedder-Policy`, and `Cross-Origin-Resource-Policy` values. The scores do not change. The HTML report lists them.
+
+### Changed
+
+- Audit skill: each CLI command saves stderr to a `.err` file, and the empty-stdout stop report names the CLI error. The prefill notes name the advisory `security:` ids, the social-tag CLI flags, and the `meta:description` level. The report validator accepts a `bun` dev-build Re-audit command only when the path is a `@searchunit/cli` checkout.
+
+### Fixed
+
+- `gsc` service-account auth no longer prints the googleapis `keyFilename` deprecation warning on stderr, so `--silent` holds.
+- Audit skill workstreams: the evidence-limit and `conversions` rows use valid result values, and CrUX is `insufficient` when the CLI skips it on a loopback URL.
+- Audit skill prefill treats `*.localhost`, `.local`, and `.internal` `sameAs` hosts as private, like the CLI.
+- Audit skill validator rejects a `bun /src/index.ts` Re-audit command with an empty repo path.
+
 ## 0.0.1 - 2026-11-02
 
 ### Added
