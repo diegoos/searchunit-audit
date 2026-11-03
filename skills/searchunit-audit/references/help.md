@@ -19,16 +19,16 @@ Check the local binary before an audit. `command -v searchunit` prints a path, a
 ```bash
 command -v searchunit
 searchunit --help
-searchunit audit "$URL" --agent --silent -o "$RUN/cli-audit.json"
-searchunit seo-check "$URL" --agent --silent -o "$RUN/cli-seo-1.json"
+searchunit audit "$URL" --agent --silent -o "$RUN/cli-audit.json" > "$RUN/cli-audit.md" 2> "$RUN/cli-audit.err"
+searchunit seo-check "$URL" --agent --silent -o "$RUN/cli-seo-1.json" > "$RUN/cli-seo-1.md" 2> "$RUN/cli-seo-1.err"
 ```
 
 `$RUN` is `docs/searchunit-audit/<YYYY-MM-DD_HH-MM>/`. `npx --yes @searchunit/cli` runs when `command -v searchunit` fails or `searchunit --help` does not exit 0:
 
 ```bash
 npx --yes @searchunit/cli --help
-npx --yes @searchunit/cli audit "$URL" --agent --silent -o "$RUN/cli-audit.json"
-npx --yes @searchunit/cli seo-check "$URL" --agent --silent -o "$RUN/cli-seo-1.json"
+npx --yes @searchunit/cli audit "$URL" --agent --silent -o "$RUN/cli-audit.json" > "$RUN/cli-audit.md" 2> "$RUN/cli-audit.err"
+npx --yes @searchunit/cli seo-check "$URL" --agent --silent -o "$RUN/cli-seo-1.json" > "$RUN/cli-seo-1.md" 2> "$RUN/cli-seo-1.err"
 ```
 
 Dev build: when the user asks for a dev build, or the skill runs inside the CLI repo, `bun <repo>/src/index.ts` replaces `searchunit` in each command. `<repo>` is the CLI repo root.

@@ -7,12 +7,12 @@ The audit calls `gsc URL`, which runs the Search Analytics slices, `sampledPages
 Use the binary named in the brief. With `searchunit`, the commands are:
 
 ```bash
-searchunit gsc check --agent --silent
-searchunit gsc "$URL" "$URL_2" --agent --silent -o "$RUN/gsc-performance.json"
-searchunit gsc inspect "$URL" "$URL_2" --agent --silent -o "$RUN/gsc-inspect.json"
+searchunit gsc check --agent --silent 2> "$RUN/gsc-check.err"
+searchunit gsc "$URL" "$URL_2" --agent --silent -o "$RUN/gsc-performance.json" 2> "$RUN/gsc-performance.err"
+searchunit gsc inspect "$URL" "$URL_2" --agent --silent -o "$RUN/gsc-inspect.json" 2> "$RUN/gsc-inspect.err"
 ```
 
-`--agent` prints Markdown, so read the figures from the JSON file that `-o` writes. A slice command writes its own file, for example `searchunit gsc queries "$URL" --agent --silent -o "$RUN/gsc-queries.json"`. The name is `gsc-<slice>.json`.
+`--agent` prints Markdown, so read the figures from the JSON file that `-o` writes. A slice command writes its own file, for example `searchunit gsc queries "$URL" --agent --silent -o "$RUN/gsc-queries.json" 2> "$RUN/gsc-queries.err"`. The names are `gsc-<slice>.json` and `gsc-<slice>.err`.
 
 When the brief names `npx --yes @searchunit/cli` or `bun <repo>/src/index.ts`, that prefix replaces `searchunit`.
 
