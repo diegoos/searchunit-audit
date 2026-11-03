@@ -181,7 +181,7 @@ Order uses this formula. Phase is `1` when severity is `critical` or `high`, or 
 
 ## Re-audit
 
-`## Re-audit` says how to check the result. It has two parts. The first part lists the commands, one line each. Use the binary chosen in step 2 for this run. For a dev build, that is `bun <repo>/src/index.ts`. Otherwise it is `searchunit`, or `npx --yes @searchunit/cli` when step 2 chose the published package:
+`## Re-audit` says how to check the result. It has two parts. The first part lists the commands, one line each. Use the binary chosen in step 2 for this run. For a dev build, that is `bun <repo>/src/index.ts`. `<repo>` is the CLI checkout, the directory whose `package.json` names `@searchunit/cli`. Otherwise it is `searchunit`, or `npx --yes @searchunit/cli` when step 2 chose the published package:
 
 - `<binary> audit "<URL>" --agent --silent` for the audited page.
 - `<binary> seo-check "<URL>" --agent --silent` for a context URL that a Plan entry names.
